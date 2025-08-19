@@ -16,7 +16,7 @@
 
 #define LED_TYPE  WS2812B
 #define COLOR_ORDER GRB
-#define SEGMENTS_PER_NUMBER 7 // this can never change unless you redesign all display routines
+#define SEGMENTS_PER_NUMBER 9 // this can never change unless you redesign all display routines
 #define NUMBER_OF_DIGITS 7    // 7 = 4 real + 3 fake,  this should be always 7 unless you redesign all display routines
 #define SPECTRUM_PIXELS 37    // 7 digits = 37 (5 unshared segments for every digit (7) and 2 more on the last from the side)
 #define DHTTYPE DHT11         // DHT 11 tempsensor
@@ -66,6 +66,34 @@
 #define digit4 seg(20), seg(21), seg(22), seg(23), seg(24), seg(25), seg(26)
 #define fdigit5 seg(22), seg(27), seg(30), seg(35), seg(28), seg(23), seg(29)
 #define digit6 seg(30), seg(31), seg(32), seg(33), seg(34), seg(35), seg(36)
+
+String mqttServer = "";
+int    mqttPort   = 1883;
+String mqttUser   = "";
+String mqttPassword = "";
+String mqttClientId = ""; 
+WiFiClient   mqttWiFiClient;
+PubSubClient mqttClient(mqttWiFiClient);
+bool mqttConnected = false;
+unsigned long lastMqttReconnectAttempt = 0;
+bool mqttReconnect() {
+  if (mqttServer.length() == 0) return false;
+  if (!mqttClient.connected()) {
+    if (mqttUser.length() > 0) {
+      mqttConnected = mqttClient.connect(mqttClientId.c_str(),
+                                         mqttUser.c_str(),
+                                         mqttPassword.c_str());
+    } else {
+      mqttConnected = mqttClient.connect(mqttClientId.c_str());
+    }
+    // optional: Auto-Discovery für HomeAssistant senden
+  }
+  return mqttConnected;
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // hier kannst du eingehende MQTT-Nachrichten verarbeiten
+}
 
 const char* host = "shelfclock";
 const int   daylightOffset_sec = 3600;
@@ -535,6 +563,19 @@ void setup() {
     struct timeval now1 = { .tv_sec = t };
     settimeofday(&now1, NULL);
   }
+  Preferences preferences;
+  preferences.begin("shelfclock", false);
+  mqttServer   = preferences.getString("mqttServer", "");
+  mqttPort     = preferences.getInt("mqttPort", 1883);
+  mqttUser     = preferences.getString("mqttUser", "");
+  mqttPassword = preferences.getString("mqttPassword", "");
+  mqttClientId = "ShelfClock_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  mqttClient.setServer(mqttServer.c_str(), mqttPort);
+  mqttClient.setCallback(mqttCallback);
+  mqttReconnect();
+
+  preferences.end();
   
   //did the DS3231 lose power (battery dead/changed), if so, set from time recieved from the NTP above
   if (rtc.lostPower()) {
@@ -726,6 +767,13 @@ void loop(){
     } else if (brightness == 10) {  //auto-dim use the value from above
       FastLED.setBrightness(lightSensorValue);     
     } 
+  }
+  if (!mqttClient.connected() && (millis() - lastMqttReconnectAttempt > 5000)) {
+    lastMqttReconnectAttempt = millis();
+    mqttReconnect();
+  }
+  if (mqttClient.connected()) {
+    mqttClient.loop();
   }
 
   displayRealtimeMode();  //always run outside time loop for speed, but only really show when it's needed
@@ -3533,6 +3581,39 @@ void loadWebPageHandlers() {
     settimeofday(&now1, NULL);    //set time on the RTC of the ESP32
     printLocalTime(); 
     server.send(200, "text/json", "{\"result\":\"ok\"}");
+  });
+  server.on("/getMQTTSettings", HTTP_GET, []() {
+    String res = mqttServer + ";" + String(mqttPort) + ";" + mqttUser + ";" + mqttPassword;
+    server.send(200, "text/plain", res);
+  });
+
+  server.on("/setMQTTSettings", HTTP_POST, []() {
+    Preferences preferences;
+    preferences.begin("shelfclock", false);
+    if (server.hasArg("mqttServer")) {
+      mqttServer = server.arg("mqttServer");
+      preferences.putString("mqttServer", mqttServer);
+    }
+    if (server.hasArg("mqttPort")) {
+      mqttPort = server.arg("mqttPort").toInt();
+      preferences.putInt("mqttPort", mqttPort);
+    }
+    if (server.hasArg("mqttUser")) {
+      mqttUser = server.arg("mqttUser");
+      preferences.putString("mqttUser", mqttUser);
+    }
+    if (server.hasArg("mqttPassword")) {
+      mqttPassword = server.arg("mqttPassword");
+      preferences.putString("mqttPassword", mqttPassword);
+    }
+    preferences.end();
+    mqttClient.setServer(mqttServer.c_str(), mqttPort);
+    server.send(200, "application/json", "{\"result\":\"ok\"}");
+  });
+
+  server.on("/testMQTT", HTTP_GET, []() {
+    bool ok = mqttClient.connected() || mqttReconnect();
+    server.send(200, "application/json", ok ? "{\"connected\":true}" : "{\"connected\":false}");
   });
 
 

@@ -9,7 +9,48 @@
     <script type="text/javascript" src="js/moment-with-locales.js"></script>
     <link rel="stylesheet" href="css/bootstrap.min.css">
 <script type="text/javascript">	
+function loadMQTTSettings() {
+      var xhttp = new XMLHttpRequest();
+      xhttp.onreadystatechange = function() {
+        if (this.readyState == 4 && this.status == 200) {
+          var p = this.responseText.split(";");
+          document.getElementById("mqttServer").value   = p[0];
+          document.getElementById("mqttPort").value     = p[1];
+          document.getElementById("mqttUser").value     = p[2];
+          document.getElementById("mqttPassword").value = p[3];
+        }
+      };
+      xhttp.open("GET", "/getMQTTSettings", true);
+      xhttp.send();
+    }
 
+    function saveMQTTSettings() {
+      var params = "mqttServer=" + encodeURIComponent(document.getElementById("mqttServer").value) +
+                   "&mqttPort="   + encodeURIComponent(document.getElementById("mqttPort").value) +
+                   "&mqttUser="   + encodeURIComponent(document.getElementById("mqttUser").value) +
+                   "&mqttPassword=" + encodeURIComponent(document.getElementById("mqttPassword").value);
+      var xhttp = new XMLHttpRequest();
+      xhttp.open("POST", "/setMQTTSettings", true);
+      xhttp.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+      xhttp.send(params);
+    }
+
+    function testMQTTConnection() {
+      var xhttp = new XMLHttpRequest();
+      xhttp.onreadystatechange = function() {
+        if (this.readyState == 4 && this.status == 200) {
+          var res = JSON.parse(this.responseText);
+          document.getElementById("mqttTestResult").innerText = res.connected ? "Connected" : "Not connected";
+        }
+      };
+      xhttp.open("GET", "/testMQTT", true);
+      xhttp.send();
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+      // bestehende Initialisierungen …
+      loadMQTTSettings();
+    });
 function getpastelColors() {
   var xhttp = new XMLHttpRequest();
   xhttp.onreadystatechange = function() {
