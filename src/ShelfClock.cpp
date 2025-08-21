@@ -621,13 +621,22 @@ byte numbers[] = {
 
 TaskHandle_t Task1;
 QueueHandle_t jobQueue;
+void setDisplayMode(String mode);
+
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 bool mqttReconnect();
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // Du kannst auch einfach erstmal nur zum Test folgendes einfügen:
-  Serial.print("MQTT Nachricht erhalten auf Topic: ");
-  Serial.println(topic);
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  if (String(topic) == "shelfclock/mode/set") {
+    setDisplayMode(message);
+    mqttClient.publish("shelfclock/mode/state", message.c_str(), true);
+  }
 }
+
 bool mqttReconnect() {
   if (mqttServer.length() == 0) return false;
   if (!mqttClient.connected()) {
@@ -649,11 +658,113 @@ bool mqttReconnect() {
 
 
 // MQTT + Device an ArduinoHA übergeben
-uint8_t mac[6];
+//byte mac[6];
 //HADevice device(mac, sizeof(mac));
-HADevice device;
+byte mac[] = {0x00, 0x10, 0xFA, 0x6E, 0x38, 0x5B};
+HADevice device(mac, sizeof(mac));
 
 HAMqtt haMqtt(mqttWiFiClient, device);
+HAButton buttonA("myButtonSnake");
+HAButton buttonB("myButtonMAtrix");
+HASelect haLightShowMode("haLightShowMode");
+
+void onSelectCommand(int8_t index, HASelect* sender)
+{
+  allBlank(); 
+      
+        
+    switch (index) {
+    case 0:
+      lightshowMode = 1;
+        break;
+    case 1:
+      lightshowMode = 2;
+        break;
+    case 2:
+      lightshowMode = 3;
+        break;
+    case 3:
+      lightshowMode = 4;
+        break;
+    case 4:
+      lightshowMode = 5;
+      break;
+    case 5:
+      lightshowMode = 6;
+      break;
+    case 6:
+      lightshowMode = 7;
+      break;
+    case 7:
+      lightshowMode = 8;
+        break;
+
+    default:
+        // unknown option
+        return;
+    }
+        oldsnakecolor = CRGB::Green;
+        getSlower = 180;
+        clockMode = 5;    
+        realtimeMode = 1;   
+        updateSettingsRequired = 1;
+
+    sender->setState(index); // report the selected option back to the HA panel
+
+    // it may return null
+    if (sender->getCurrentOption()) {
+        Serial.print("Current option: ");
+        Serial.println(sender->getCurrentOption());
+    }
+}
+
+void setDisplayMode(String mode) {
+  if (mode == "clock") {
+    allBlank();   
+    clockMode = 10;     
+    realtimeMode = 0;   
+    updateSettingsRequired = 1;
+    breakOutSet = 1;  
+  
+  } else if (mode == "date") {
+      currentMode = 11;
+  } else if (mode == "snake") {
+    allBlank();  
+    clockMode = 0; 
+    updateSettingsRequired = 1;
+    realtimeMode = 0;   
+    printLocalTime(); 
+    breakOutSet = 1;
+    
+  } else if (mode == "matrix") {
+    clockMode = 5;
+    lightshowMode == 2;
+    suspendType == 0;
+    isAsleep == 0;
+  } else if (mode == "rainbow") {
+      currentMode = 1;
+  } else if (mode == "twinkles") {
+      currentMode = 2;
+  } else if (mode == "fire") {
+      currentMode = 4;
+  } else if (mode == "greenmatrix") {
+      currentMode = 5;
+  } else if (mode == "cylon") {
+      currentMode = 0;
+  }
+
+  // Bestätigung per MQTT (optional)
+  mqttClient.publish("shelfclock/mode/state", mode.c_str(), true);
+}
+void onButtonCommand(HAButton* sender)
+{
+    if (sender == &buttonA) {
+      setDisplayMode("clock");
+       
+    } else if (sender == &buttonB) {
+      setDisplayMode("snake");
+    }
+}
 void setup() {
   
   Serial.begin(115200);
@@ -662,7 +773,16 @@ void setup() {
   device.setManufacturer("DeinName");
   device.setModel("ESP32 LED Clock");
   device.setSoftwareVersion("1.0.0");
-
+  buttonA.setIcon("mdi:fire");
+  buttonA.setName("Snake");
+  buttonA.onCommand(onButtonCommand);
+  buttonB.setIcon("mdi:fire");
+  buttonB.setName("Matrix");
+  buttonB.onCommand(onButtonCommand);
+  haLightShowMode.setOptions("Chase;Twinkles;Rainbow;Matrix;Rain;Fire;Snake;Cylon"); // use semicolons as separator of options
+  haLightShowMode.onCommand(onSelectCommand);
+  haLightShowMode.setIcon("mdi:home"); // optional
+  haLightShowMode.setName("Light Show Modus"); // optional
   //setup LEDs
   FastLED.addLeds<LED_TYPE,LED_PIN,COLOR_ORDER>(LEDs,NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(255);
@@ -829,6 +949,8 @@ void setup() {
     mqttPort     = preferences.getInt("mqttPort", 1883);
     mqttUser     = preferences.getString("mqttUser", "");
     mqttPassword = preferences.getString("mqttPassword", "");
+    haMqtt.begin("192.168.50.11",1883,"mqttUser","mqttPassword");
+ 
     
     mqttClient.setServer(mqttServer.c_str(), mqttPort);
     mqttClient.setCallback(mqttCallback);
@@ -1114,6 +1236,10 @@ void loop(){
      //   Serial.println("Wi-Fi connection is successful ");
     // Your other code logic can go here
   }
+  if (!mqttClient.connected()) {
+    mqttReconnect();
+  }
+  mqttClient.loop();
   haMqtt.loop();
   //Change Frequency so as to not use hard-coded delays
   unsigned long currentMillis = millis();  
@@ -5151,6 +5277,7 @@ void loadWebPageHandlers() {
         #endif
         breakOutSet = 1;   
       }
+      
 
       // loadpreset1
       if (!json["loadPreset1"].isNull()) {
