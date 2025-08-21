@@ -14,6 +14,7 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
+#include <ArduinoHA.h>
 Preferences preferences;
 
 #define HAS_RTC false
@@ -641,9 +642,26 @@ bool mqttReconnect() {
   }
   return mqttConnected;
 }
-void setup() {
-  Serial.begin(115200);
+/// HA CONFIG//
 
+
+
+
+
+// MQTT + Device an ArduinoHA übergeben
+uint8_t mac[6];
+//HADevice device(mac, sizeof(mac));
+HADevice device;
+
+HAMqtt haMqtt(mqttWiFiClient, device);
+void setup() {
+  
+  Serial.begin(115200);
+  // Geräteinfos für Home Assistant
+  device.setName("ShelfClock");
+  device.setManufacturer("DeinName");
+  device.setModel("ESP32 LED Clock");
+  device.setSoftwareVersion("1.0.0");
 
   //setup LEDs
   FastLED.addLeds<LED_TYPE,LED_PIN,COLOR_ORDER>(LEDs,NUM_LEDS).setCorrection(TypicalLEDStrip);
@@ -790,7 +808,7 @@ void setup() {
   if (firstRun) {delay(500);}
   Serial.println("Wifi Starting");
   WiFi.hostname(host); //set hostname
-
+  WiFi.macAddress(mac);
   // setup AutoConnect to control WiFi
   if (Portal.begin()) {
     Serial.println("WiFi Connected: " + WiFi.localIP().toString());
@@ -1096,7 +1114,7 @@ void loop(){
      //   Serial.println("Wi-Fi connection is successful ");
     // Your other code logic can go here
   }
-
+  haMqtt.loop();
   //Change Frequency so as to not use hard-coded delays
   unsigned long currentMillis = millis();  
   //run everything inside here every second
