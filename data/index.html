@@ -12,10 +12,10 @@
 window.addEventListener("load", startup, false);
 
 function startup() {
-	}
+	}\r\n\r\nfunction postUpdate(obj) {\r\n  fetch("/updateanything", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(obj)});\r\n}\r\n
 function msg() {alert("Sorry, not ready yet!");}
 
-function showClock() {$.post("/goClockMode");}
+function showClock() {postUpdate({ClockMode: 1});}
 function startCountdown() {
     var h = $('#hoursCD').val();
     var m = $('#minutesCD').val();
@@ -29,9 +29,8 @@ function startCountdown() {
     var ms = (h * 60 * 60 * 1000) + (m * 60 * 1000) + (s * 1000);
     var countdown = { ms: ms};
     console.log(countdown);
-    $.post("/goCountdownMode", countdown);
+    postUpdate({CountdownMode: ms});
 }
-function showTemperature() {$.post("/goTemperatureMode");}
 function showScoreboard() {
     var left = $('#scoreboardLeft').val();
     var right = $('#scoreboardRight').val();
@@ -45,7 +44,7 @@ function showScoreboard() {
         left: left,
         right: right
     };
-    $.post("/goScoreboardMode", scoreboard);
+    postUpdate({ScoreboardMode: scoreboard});
 }
 
 function startTimer() {
@@ -61,37 +60,22 @@ function startTimer() {
     var ms = (h * 60 * 60 * 1000) + (m * 60 * 1000) + (s * 1000);
     var countdown = { ms: ms};
     console.log(countdown);
-    $.post("/goStopwatchMode", countdown);
+    postUpdate({StopwatchMode: ms});
 }
 
-function showLightshow0() {$.post("/goLightshowMode", { lightshowMode: 0 }); console.log(0); }
-function showLightshow1() {$.post("/goLightshowMode", { lightshowMode: 1 }); console.log(1); }
-function showLightshow2() {$.post("/goLightshowMode", { lightshowMode: 2 }); console.log(2); }
-function showLightshow3() {$.post("/goLightshowMode", { lightshowMode: 3 }); console.log(3); }
-function showLightshow4() {$.post("/goLightshowMode", { lightshowMode: 4 }); console.log(4); }
-function showLightshow5() {$.post("/goLightshowMode", { lightshowMode: 5 }); console.log(5); }
-function showLightshow6() {$.post("/goLightshowMode", { lightshowMode: 6 }); console.log(6); }
-function showLightshow7() {$.post("/goLightshowMode", { lightshowMode: 7 }); console.log(7); }
-function showLightshow8() {$.post("/goLightshowMode", { lightshowMode: 8 }); console.log(8); }
-function showLightshow9() {$.post("/goLightshowMode", { lightshowMode: 9 }); console.log(9); }
-function showDate() {$.post("/goDateMode");}
-function showHumidity() {$.post("/goHumidityMode");}	
-function showSpectrum0() {$.post("/goSpectrumMode", { spectrumMode: 0 }); console.log(0); }
-function showSpectrum1() {$.post("/goSpectrumMode", { spectrumMode: 1 }); console.log(1); }
-function showSpectrum2() {$.post("/goSpectrumMode", { spectrumMode: 2 }); console.log(2); }
-function showSpectrum3() {$.post("/goSpectrumMode", { spectrumMode: 3 }); console.log(3); }
-function showSpectrum4() {$.post("/goSpectrumMode", { spectrumMode: 4 }); console.log(4); }
-function showSpectrum5() {$.post("/goSpectrumMode", { spectrumMode: 5 }); console.log(5); }
-function showSpectrum6() {$.post("/goSpectrumMode", { spectrumMode: 6 }); console.log(6); }
-function showSpectrum7() {$.post("/goSpectrumMode", { spectrumMode: 7 }); console.log(7); }
-function showSpectrum8() {$.post("/goSpectrumMode", { spectrumMode: 8 }); console.log(8); }
-function showSpectrum9() {$.post("/goSpectrumMode", { spectrumMode: 9 }); console.log(9); }
-function showSpectrum10() {$.post("/goSpectrumMode", { spectrumMode: 10 }); console.log(10); }
-function showSpectrum11() {$.post("/goSpectrumMode", { spectrumMode: 11 }); console.log(11); }
-function displayOff() {$.post("/goDisplayOffMode");}
-function scrollingMode() {$.post("/goScrollingMode");}
-function getpreset1() {$.post("/getPreset1");}
-function getpreset2() {$.post("/getPreset2");}
+function showLightshow0() {postUpdate({lightshowMode: 0}); console.log(0); }
+function showLightshow1() {postUpdate({lightshowMode: 1}); console.log(1); }
+function showLightshow2() {postUpdate({lightshowMode: 2}); console.log(2); }
+function showLightshow3() {postUpdate({lightshowMode: 3}); console.log(3); }
+function showLightshow4() {postUpdate({lightshowMode: 4}); console.log(4); }
+function showLightshow5() {postUpdate({lightshowMode: 5}); console.log(5); }
+function showLightshow6() {postUpdate({lightshowMode: 6}); console.log(6); }
+function showLightshow7() {postUpdate({lightshowMode: 7}); console.log(7); }
+function showLightshow8() {postUpdate({lightshowMode: 8}); console.log(8); }
+function showLightshow9() {postUpdate({lightshowMode: 9}); console.log(9); }
+function showDate() {postUpdate({DateMode: 1});}
+function displayOff() {postUpdate({DisplayOffMode: 1});}
+function scrollingMode() {postUpdate({ScrollingMode: 1});}
 
 
 function upleft() {
@@ -379,6 +363,12 @@ window.addEventListener("load", myInit, true); function myInit(){
                 <li class="nav-item">
                     <a class="nav-link" href="./settings.html">Settings</a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/debugpage">Debug</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/debuglog" target="_blank">Console</a>
+                </li>
         </div>
     </nav>
 
@@ -394,14 +384,9 @@ window.addEventListener("load", myInit, true); function myInit(){
 						<br>
 						<div class="w3-col s4">
 							<form>
-								<input type="button" class="favorite styled" value="UHR" id="clock" onclick="showClock()">
+								<input type="button" class="favorite styled" value="Clock" id="clock" onclick="showClock()">
 								<input type="button" class="favorite styled" value="Datum" id="date" onclick="showDate()">
-							</form>
-							<br>
-							<br>
-							<form>
-								<input type="button" class="favorite styled" value="Temperature" onclick="showTemperature()">
-								<input type="button" class="favorite styled" value="Humidity" onclick="showHumidity()">
+                               
 							</form>
 							<br>
 							<form>
@@ -413,25 +398,7 @@ window.addEventListener("load", myInit, true); function myInit(){
 				</div>
 			</div>
 		</div>
-		<div class="row" style="margin: 10px 10px;">
-			<div class="card">		
-				<div class="card-body">
-					<form>
-						<div style="text-align: center;">
-							<strong>Load Saved Preset</strong>
-						</div>
-						<br>
-						<div class="w3-col s4">
-							<form>
-								<input type="button" class="favorite yellow-styled" value="Preset 1" onclick="getpreset1()">
-								<input type="button" class="favorite yellow-styled" value="Preset B" onclick="getpreset2()">
-							</form>
-							<br>
-						</div>
-					</form>
-				</div>
-			</div>
-		</div>
+		
 		<div class="row" style="margin: 10px 10px;">
             <div class="card">
                 <div class="card-body">
@@ -551,47 +518,7 @@ window.addEventListener("load", myInit, true); function myInit(){
 				</div>
 			</div>
 		</div>
-		<div class="row" style="margin: 10px 10px;">
-			<div class="card">		
-				<div class="card-body">
-					<form>
-						<div style="text-align: center;">
-							<strong>Spectrum Analyzer</strong>
-						</div>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="BM Up" onclick="showSpectrum0()">
-							<input type="button" class="favorite purple-styled" value="TM Down" onclick="showSpectrum5()">
-						</form>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="CM Out" onclick="showSpectrum1()">
-							<input type="button" class="favorite purple-styled" value="CS In" onclick="showSpectrum6()">
-						</form>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="TL to BR" onclick="showSpectrum3()">
-							<input type="button" class="favorite purple-styled" value="TR to BL" onclick="showSpectrum8()">
-						</form>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="BL to TR" onclick="showSpectrum2()">
-							<input type="button" class="favorite purple-styled" value="BR to TL" onclick="showSpectrum7()">
-						</form>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="Vertical L" onclick="showSpectrum4()">
-							<input type="button" class="favorite purple-styled" value="Vertical R" onclick="showSpectrum10()">
-						</form>
-						<br>
-						<form>
-							<input type="button" class="favorite purple-styled" value="Horizontal L" onclick="showSpectrum9()">
-							<input type="button" class="favorite purple-styled" value="Horizontal R" onclick="showSpectrum11()">
-						</form>
-					</form>
-				</div>
-			</div>
-		</div>
+		
 	</div>
 </div>
 
@@ -599,3 +526,5 @@ window.addEventListener("load", myInit, true); function myInit(){
 </body>
 
 </html>
+
+

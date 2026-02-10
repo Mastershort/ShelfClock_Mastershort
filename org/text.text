@@ -1,33 +1,38 @@
-#define FASTLED_ESP32_FLASH_LOCK 1
+#define FASTLED_ESP32_FLASH_LOCK 1FS
 #define FASTLED_INTERNAL
 #include <FastLED.h>
 #include <WiFi.h>
 #include "WebServer.h"
-#include <FS.h>
+#include <FS.h>     
 #include <HTTPUpdateServer.h>
 #include <ESPmDNS.h>
 #include <Update.h>
 #include <AutoConnect.h>
 #include <ArduinoJson.h>
 #include <MultiMap.h>
-#include "../include/ShelfClock.h"
-#include "../include/ha_integration.h"
-#include "../include/mqtt_integration.h"
-#include "../include/prefs.h"
-#include <WiFiClient.h>
-#include <PubSubClient.h>
-#include <Preferences.h>
-#include <ArduinoHA.h>
-Preferences preferences;
+#include "../include/ShelfClick.h"
 
+#define HAS_RTC    true
+#define HAS_DHT    true
+#define HAS_SOUNDDETECTOR    true
+#define HAS_BUZZER    true
+#define HAS_PHOTOSENSOR    true
+#define HAS_ONLINEWEATHER   true
+#define HAS_USWEATHER   true
+#define TEST_CLOCK    false
+#if HAS_RTC
+  #include "RTClib.h"
+  #endif
 
-WiFiClient   mqttWiFiClient;
-WiFiClient   haWiFiClient;
-PubSubClient mqttClient(mqttWiFiClient);
-bool mqttConnected = false;
-unsigned long lastMqttReconnectAttempt = 0;
+#if HAS_SOUNDDETECTOR
+  #include <arduinoFFT.h>				// Don't forget to change CPU Frequency to 240MHz in Arduino board settings
+  #include <driver/i2s.h>
+  #endif
 
-
+#if HAS_BUZZER
+//  #include "../lib/Sounds/Sounds.h"
+  #include <NonBlockingRtttl.h> 
+  #endif
 
 #define USE_LITTLEFS    true
 #define USE_SPIFFS      false
@@ -51,7 +56,7 @@ unsigned long lastMqttReconnectAttempt = 0;
   FS* filesystem =      &FFat;
   #define FileFS        FFat
   #define FS_Name       "FFat"
-#endif
+  #endif
 
 #define FORMAT_SPIFFS_IF_FAILED false
 #define STRINGIFY_HELPER(x) #x
@@ -61,17 +66,48 @@ unsigned long lastMqttReconnectAttempt = 0;
 #define SEGMENTS_PER_NUMBER 7 // this can never change unless you redesign all display routines
 #define NUMBER_OF_DIGITS 7    // 7 = 4 real + 3 fake,  this should be always 7 unless you redesign all display routines
 #define SPECTRUM_PIXELS 37    // 7 digits = 37 (5 unshared segments for every digit (7) and 2 more on the last from the side)
-#define LED_PIN 15             // led control pin
+#define LED_PIN 16             // led control pin
 #define MILLI_AMPS 2400 
-#define LEDS_PER_SEGMENT  9   // can be 1 to 10 LEDS per segment (7 per instructions)
+//#define LEDS_PER_SEGMENT  7   // can be 1 to 10 LEDS per segment (7 per instructions)
 #define LEDS_PER_DIGIT (LEDS_PER_SEGMENT * SEGMENTS_PER_NUMBER)
 #define FAKE_NUM_LEDS (NUMBER_OF_DIGITS * LEDS_PER_DIGIT)
+#define PHOTO_SAMPLES 10      //number of samples to take from the photoresister
+#define PHOTO_SIZE 5
 #define SEGMENTS_LEDS (SPECTRUM_PIXELS * LEDS_PER_SEGMENT)  // Number leds in all segments
 #define SPOT_LEDS (NUMBER_OF_DIGITS * 2)        // Number of Spotlight leds
 #define NUM_LEDS  (SEGMENTS_LEDS + SPOT_LEDS)   // Number of all leds
 #define WiFi_MAX_RETRIES 100
 #define WiFi_MAX_RETRY_DURATION 600000 // 10 minutes in milliseconds
 
+#if TEST_CLOCK
+  #define LEDS_PER_SEGMENT  4
+#else
+  #define LEDS_PER_SEGMENT  7
+#endif
+
+#if HAS_DHT
+  #include "DHT.h"
+  #define DHTTYPE DHT11         // DHT 11 tempsensor
+  #define DHT_PIN 33             // DHT sensor pin
+  #endif
+#if HAS_SOUNDDETECTOR
+  #define SOUNDDETECTOR_I2S_WS 23             
+  #define SOUNDDETECTOR_I2S_SD 32             
+  #define SOUNDDETECTOR_I2S_SCK 18             
+  #define SOUNDDETECTOR_I2S_PORT I2S_NUM_0
+  #define SOUNDDETECTOR_SAMPLING_FREQ 8000    //sampling rate in Hz, must be 40000 or less due to ADC conversion time. Determines maximum frequency that can be analysed by the FFT Fmax=sampleF/2.
+  #define SOUNDDETECTOR_BITS_PER_SAMPLE 16
+  #define SOUNDDETECTOR_SAMPLES 128           // Smaller FFT size, Must be a power of 2
+  #define SOUNDDETECTOR_BANDS_WIDTH       8            // To change this, you will need to change the bunch of if statements describing the mapping from bins to bands
+  #define SOUNDDETECTOR_BANDS_HEIGHT            (LEDS_PER_SEGMENT * 2)                // Don't allow the bars to go offscreen
+  const int ANALYZER_SIZE = SOUNDDETECTOR_BANDS_WIDTH * LEDS_PER_SEGMENT * 2;
+  #endif
+#if HAS_BUZZER
+  #define BUZZER_PIN 17             // peizo speaker
+  #endif
+#if HAS_PHOTOSENSOR
+  #define PHOTORESISTER_PIN 36             // select the analog input pin for the photoresistor
+  #endif
 #define digit0 seg(0), seg(1), seg(2), seg(3), seg(4), seg(5), seg(6)
 #define fdigit1 seg(2), seg(7), seg(10), seg(15), seg(8), seg(3), seg(9)
 #define digit2 seg(10), seg(11), seg(12), seg(13), seg(14), seg(15), seg(16)
@@ -112,15 +148,104 @@ unsigned long lastMqttReconnectAttempt = 0;
  #define nseg(n) n*LEDS_PER_SEGMENT+9, n*LEDS_PER_SEGMENT+8, n*LEDS_PER_SEGMENT+7, n*LEDS_PER_SEGMENT+6, n*LEDS_PER_SEGMENT+5, n*LEDS_PER_SEGMENT+4, n*LEDS_PER_SEGMENT+3, n*LEDS_PER_SEGMENT+2, n*LEDS_PER_SEGMENT+1, n*LEDS_PER_SEGMENT
 #else
  #error "Not supported Leds per segment. You need to add definition of seg(n) with needed number of elements according to formula above"
-#endif
+  #endif
 
 
+#if HAS_SOUNDDETECTOR
+  /*
+  b     b     b     b     b     b     b     b
+  a     a     a     a     a     a     a     a
+  r     r     r     r     r     r     r     r
+  0     1     2     3     4     5     6     7
+
+    34    28    24    18    14     8     4
+    →→→   →→→   →→→  →→→   →→→   →→→   →→→
+  ↑     ↓     ↑     ↓     ↑     ↓     ↑     ↓
+  ↑33   ↓35   ↑23   ↓25   ↑13   ↓15   ↑3    ↓5
+  ↑     ↓     ↑     ↓     ↑     ↓     ↑     ↓
+  ↑ 36  ↓ 29  ↑ 26  ↓ 19  ↑ 16  ↓   9 ↑  6  ↓
+    →→→   →→→   →→→  →→→   →→→   →→→   →→→
+  ↑     ↓     ↑     ↓     ↑     ↓     ↑     ↓
+  ↑32   ↓30   ↑22   ↓20   ↑12   ↓10   ↑2    ↓0
+  ↑     ↓     ↑     ↓     ↑     ↓     ↑     ↓
+  ↑ 31  ↓ 27  ↑ 21  ↓ 17  ↑ 11  ↓  7  ↑  1  ↓
+   →→→   →→→   →→→  →→→   →→→   →→→   →→→  
+  */
+
+  #define bar0 seg(32), seg(33)
+  #define bar1 nseg(30), nseg(35)
+  #define bar2 seg(22), seg(23)
+  #define bar3 nseg(20), nseg(25)
+  #define bar4 seg(12), seg(13)
+  #define bar5 nseg(10), nseg(15)
+  #define bar6 seg(2), seg(3)
+  #define bar7 nseg(0), nseg(5)
+  const uint16_t ANALYZER[(NUMBER_OF_DIGITS+1)*LEDS_PER_SEGMENT*2] = {bar0, bar1, bar2, bar3, bar4, bar5, bar6, bar7};
+
+
+  // Sampling and FFT stuff
+  unsigned int sampling_period_us;
+  byte peak[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};              // The length of these arrays must be >= SOUNDDETECTOR_BANDS_WIDTH
+  int oldBarHeights[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+  int SOUNDDETECTOR_bandValues[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+  int SOUNDDETECTOR_noiseThresholds[SOUNDDETECTOR_BANDS_WIDTH] = {800, 300, 200, 200, 200, 200, 200, 200}; // Example thresholds
+  double vReal[SOUNDDETECTOR_SAMPLES];
+  double vImag[SOUNDDETECTOR_SAMPLES];
+  long SOUNDDETECTOR_Amplitude = 1000;
+  arduinoFFT FFT = arduinoFFT(vReal, vImag, SOUNDDETECTOR_SAMPLES, SOUNDDETECTOR_SAMPLING_FREQ);
+  DEFINE_GRADIENT_PALETTE( purple_gp ) {
+    0,   0, 212, 255,   //blue
+  255, 179,   0, 255 }; //purple
+  DEFINE_GRADIENT_PALETTE( outrun_gp ) {
+    0, 141,   0, 100,   //purple
+  127, 255, 192,   0,   //yellow
+  255,   0,   5, 255 };  //blue
+  DEFINE_GRADIENT_PALETTE( greenblue_gp ) {
+    0,   0, 255,  60,   //green
+  64,   0, 236, 255,   //cyan
+  128,   0,   5, 255,   //blue
+  192,   0, 236, 255,   //cyan
+  255,   0, 255,  60 }; //green
+  DEFINE_GRADIENT_PALETTE( redyellow_gp ) {
+    0,   200, 200,  200,   //white
+  64,   255, 218,    0,   //yellow
+  128,   231,   0,    0,   //red
+  192,   255, 218,    0,   //yellow
+  255,   200, 200,  200 }; //white
+  DEFINE_GRADIENT_PALETTE( fire_gp ) {
+    0,   255,   0,    0,   //red
+  64,   255, 64, 0,   //orange
+  128,   255, 128,    0,   //yellow
+  192,   255, 192,    0,   //light yellow
+  255,   255, 255,  255 }; //white
+  CRGBPalette16 purplePal = purple_gp;
+  CRGBPalette16 outrunPal = outrun_gp;
+  CRGBPalette16 greenbluePal = greenblue_gp;
+  CRGBPalette16 heatPal = redyellow_gp;
+  CRGBPalette16 heaterPal = fire_gp;
+  uint8_t colorTimer = 0;
+  int buttonPushCounter = 0;
+  int SOUNDDETECTOR_averageAudioInput = 0;
+  int SOUNDDETECTOR_decay = 0; // HOW MANY MS BEFORE ONE LIGHT DECAY
+  int SOUNDDETECTOR_decay_check = 0;
+  int SOUNDDETECTOR_pre_react = 0; // NEW SPIKE CONVERSION
+  int SOUNDDETECTOR_react = 0; // NUMBER OF LEDs BEING LIT
+  int SOUNDDETECTOR_post_react = 0; // OLD SPIKE CONVERSION
+  #endif
 
 String softwareVersion = "version-2.0.0-alpha";
 const char* host = "shelfclock";
 const int   daylightOffset_sec = 3600;
 const char* ntpServer = "pool.ntp.org";
 
+#if HAS_BUZZER
+  const int valid_durations[] = {1, 2, 4, 8, 16, 32};
+  const int valid_octaves[] = {4, 5, 6, 7};
+  const int valid_beats[] = {25, 28, 31, 35, 40, 45, 50, 56, 63, 70, 80, 90, 100, 112, 125, 140, 160, 180, 200, 225, 250, 285, 320, 355, 400, 450, 500, 565, 635, 715, 800, 900};
+  int totalSongs = 0;
+  const size_t songTaskbufferSize = 128;  // Adjust the buffer size as per your requirements
+  char songTaskbuffer[songTaskbufferSize];
+  #endif
 unsigned long WiFi_startTime = 0;
 unsigned long WiFi_elapsedTime = 0;
 int WiFi_retryCount = 0;
@@ -131,6 +256,13 @@ int colorWheelPositionTwo = 255; // 2nd COLOR WHEEL POSITION
 const int colorWheelSpeed = 3;
 int sleepTimerCurrent = 0;
 int isAsleep = 0;
+#if HAS_PHOTOSENSOR
+  int photoresisterReadings[PHOTO_SAMPLES] = {0};      // the readings from the analog input
+  int readIndex = 0;              // the index of the current reading
+  int lightSensorValue = 255;
+  static long  brightnessSum   = 0;
+  static bool  brightnessInited = false;
+  #endif
 int previousTimeMin = 0;
 int previousTimeHour = 0;
 int previousTimeDay = 0;
@@ -163,53 +295,92 @@ int snakePosition = 0;  //snake's position
 int foodSpot = random(SPECTRUM_PIXELS-1);  //food spot
 int snakeWaiting = 0;  //waiting
 int getSlower = 180;
-int Level = 1;
 int daysUptime = 0;
 int hoursUptime = 0;
 int minutesUptime = 0;
+#if HAS_ONLINEWEATHER || HAS_USWEATHER
+  #define LAT_SIZE 15
+  #define LON_SIZE 15
+  #define API_SIZE 50
+  char latitude[LAT_SIZE] = "44.197368602";    // Default value if needed  44.197368602
+  char longitude[LON_SIZE] = "-124.112932602";// Default value if needed  -122.782794
+  bool humidity_outdoor_enable = 0;
+  bool temperature_outdoor_enable = 0;
+  float outdoorTemp = -500;
+  float outdoorHumidity = -1;
+  #endif
+#if HAS_USWEATHER
+  int rainForecast[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // Global array to store rain forecast data
+  float noaaTemp = 0.0f;
+  float noaaHumidity = 0.0f;
+  float tideHeight[48];   // Stores hourly tide heights 
+  char textTides[128] = "H 00:00 0.0 ft L 00:00 0.0 ft H 00:00 0.0 ft L 00:00 0.0 ft";    // Stores high/low tide information as a formatted string
+  #define SID_SIZE 8
+  char stationID[SID_SIZE] = "9434939"; // Default station ID, can be modified by the user 9434939  https://tidesandcurrents.noaa.gov/map/index.html
+  uint32_t tideColor[14];   // Stores RGB colors for each hour based on tide height
+  bool dailyPollSuccess = false; //did the tide poll work?
+  int dailyPollFailed = 0;
+  #endif
+#if HAS_ONLINEWEATHER
+    char apikey[API_SIZE] = "";
+  #endif
+#if HAS_BUZZER
+  bool useAudibleAlarm = 0;
+  char defaultAudibleAlarm[100] = "Final Countdown";
+  char specialAudibleAlarm[100] = "Final Countdown";
+  DynamicJsonDocument listOfSong(8192);
+  char songsArray[64][64];
+  char filesArray[64][64];
+  #endif
 
-bool updateSettingsRequired = false;
-unsigned long settingsSaveTimer = 0;  // Timer for delayed settings save
-String lastUpdateBody = "";
-unsigned long lastUpdateAt = 0;
-
-// Web Debug Log
-#define DEBUG_LOG_SIZE 100
-String debugLog[DEBUG_LOG_SIZE];
-int debugLogIndex = 0;
-
-void webLog(const String& msg) {
-  Serial.println(msg);  // Also print to Serial
-  debugLog[debugLogIndex] = String(millis()) + ": " + msg;
-  debugLogIndex = (debugLogIndex + 1) % DEBUG_LOG_SIZE;
-}
+bool updateSettingsRequired = 0;
 
 DynamicJsonDocument jsonDoc(8192); // create a JSON document to store the data
 DynamicJsonDocument jsonScheduleData(8192);  //stores schedules
 File fsUploadFile;
+#if HAS_BUZZER
+bool lastSongUploadOk = false;
+String lastSongUploadMessage;
+#endif
 
 struct tm timeinfo; 
 CRGB LEDs[NUM_LEDS];
+#if HAS_DHT
+  DHT dht(DHT_PIN, DHTTYPE);
+  int altitudeLocal = 81;  //in meters
+#endif
 WebServer server(80);
 HTTPUpdateServer httpUpdateServer;
+#if HAS_RTC
+  RTC_DS3231 rtc;
+#endif
 AutoConnect      Portal(server);
 AutoConnectConfig  Config;
 
 // global settings that get saved to flash via preffs
-byte clockMode = 11;   // Clock modes: 0=Clock, 1=Countdown, 3=Scoreboard, 4=Stopwatch, 5=Lightshow, 6=Rainbows, 7=Date, 10=Display Off, 11=Scroll
+byte clockMode = 11;   // Clock modes: 0=Clock, 1=Countdown, 2=Temperature, 3=Scoreboard, 4=Stopwatch, 5=Lightshow, 6=Rainbows, 7=Date, 8=Humidity, 9=Spectrum, 10=Display Off, 11=Scroll
 byte clockDisplayType = 3; //0-Center Times, 1-24-hour Military Time, 2-12-hour Space-Padded, 3-Blinking Center Light
 byte dateDisplayType = 5; //0-Zero-Padded (MMDD), 1-Space-Padded (MMDD), 2-Center Dates (1MDD), 3-Just Day of Week (Sun), 4-Just Numeric Day (DD), 5-With "." Separator (MM.DD), 6-Just Year (YYYY)
+byte tempDisplayType = 0; //0-Temperature with Degree and Type (79°F), 1-Temperature with just Type (79 F), 2-Temperature with just Degree (79°), 3-Temperature with Decimal (79.9), 4-Just Temperature (79)
+byte humiDisplayType = 0; //0-Humidity with Symbol (34 H), 1-Humidity with Decimal (34.9), 2-Just Humidity (79)
 byte pastelColors = 0;
+byte temperatureSymbol = 39;   // 36=Celcius, 39=Fahrenheit check 'numbers'
 bool DSTime = 0;
 long gmtOffset_sec = -28800;
 bool fakeTime = 0;
 byte ClockColorSettings = 0;
 byte DateColorSettings = 0;
+byte tempColorSettings = 0;
+byte humiColorSettings = 0;
+int temperatureCorrection = 0;
 int colonType = 0;
 byte ColorChangeFrequency = 0;
-byte brightness = 10;
+byte brightness = 10;  //set to 10 for photoresister control at startup
 String scrollText = "dAdS ArE tHE bESt";
 bool colorchangeCD = 1;
+int spectrumMode = 0;
+int spectrumColorSettings = 2;
+int spectrumBackgroundSettings = 0;
 int realtimeMode = 0;
 int spotlightsColorSettings = 0;
 bool useSpotlights = 1;
@@ -219,21 +390,36 @@ bool scrollOptions1 = 0;   //Military Time (HHMM)
 bool scrollOptions2 = 0;   //Day of Week (DOW)
 bool scrollOptions3 = 0;   //Today's Date (DD-MM)
 bool scrollOptions4 = 0;   //Year (YYYY)
+bool scrollOptions5 = 0;   //Temperature (70 °F)
+bool scrollOptions6 = 0;   //Humidity (47 H)
 bool scrollOptions7 = 0;   //Text Message
 bool scrollOptions8 = 1;   //IP Address of Clock
+bool scrollOptions9 = 0;   //Tide Forecast
 int scrollFrequency = 1;
 int lightshowMode = 0;
+byte randomSpectrumMode = 0;
 int suspendFrequency = 1;  //in minutes
 byte suspendType = 0; //0-off, 1-digits-only, 2-everything
 bool firstRun = 0;  //will slow down the startup for diagnosing boot issues
+#if HAS_SOUNDDETECTOR
+  static int prevPeak[SOUNDDETECTOR_BANDS_WIDTH] = {0}; // Initialize all elements to 0
+#endif
 uint32_t countdownColorValue = 0x00FF04; 
+uint32_t spectrumColorValue = 0xFF0000;  // default red
+uint32_t spectrumBackgroundColorValue = 0x000000;  
 uint32_t hourColorValue = 0xFF0000;  // default red
 uint32_t colonColorValue = 0xFF0000;  // default red
 uint32_t minColorValue = 0xFF0000;  // default red
 uint32_t spotlightsColorValue = 0xE8EEBA;  
 uint32_t scrollColorValue = 0xFFFFFF;  
+uint32_t humiColorValue = 0x0033FF; 
+uint32_t humiSymbolColorValue = 0x0033FF; 
+uint32_t humiDecimalColorValue = 0x0033FF; 
 uint32_t scoreboardColorLeftValue = 0x0091FF;  
 uint32_t scoreboardColorRightValue = 0x00FF6E;  
+uint32_t tempColorValue = 0xFFF700;  
+uint32_t typeColorValue = 0xFFF700;  
+uint32_t degreeColorValue = 0xFFF700;  
 uint32_t dayColorValue = 0xEE00FF; 
 uint32_t monthColorValue = 0xEE00FF;  
 uint32_t separatorColorValue = 0xEE00FF; 
@@ -243,14 +429,24 @@ CRGB alternateColor = CRGB::Black;
 CRGB oldsnakecolor = CRGB::Green;
 CRGB spotcolor = CHSV(random(0, 255), 255, 255);
 CRGB countdownColor = CRGB(countdownColorValue);
+CRGB spectrumColor = CRGB(spectrumColorValue);
+CRGB spectrumBackgroundColor = CRGB(spectrumBackgroundColorValue);
 CRGB hourColor = CRGB(hourColorValue);
 CRGB colonColor = CRGB(colonColorValue); 
 CRGB minColor = CRGB(minColorValue);
 CRGB tinyhourColor = CRGB(colonColorValue);
 CRGB spotlightsColor = CRGB(spotlightsColorValue);
 CRGB scrollColor = CRGB(scrollColorValue);
+CRGB humiColor = CRGB(humiColorValue);
+CRGB tinyhumiColor = CRGB(humiColorValue);
+CRGB humiSymbolColor = CRGB(humiSymbolColorValue);
+CRGB humiDecimalColor = CRGB(humiDecimalColorValue);
 CRGB scoreboardColorLeft = CRGB(scoreboardColorLeftValue);
 CRGB scoreboardColorRight = CRGB(scoreboardColorRightValue);
+CRGB tempColor = CRGB(tempColorValue);
+CRGB tinytempColor = CRGB(tempColorValue);
+CRGB typeColor = CRGB(typeColorValue);
+CRGB degreeColor = CRGB(degreeColorValue);
 CRGB dayColor = CRGB(dayColorValue);
 CRGB monthColor = CRGB(monthColorValue);
 CRGB tinymonthColor = CRGB(monthColorValue);
@@ -426,15 +622,12 @@ byte numbers[] = {
    0b1010010    //  [96] 3-lines (special pad)
    };
 
- 
+TaskHandle_t Task1;
+QueueHandle_t jobQueue;
 
 void setup() {
-  
   Serial.begin(115200);
-  setupPrefs();   // Initialize Preferences with "ShelfClock" namespace
-  setupHA();      // Home Assistant Integration
-  // Note: preferences.begin() is already called in setupPrefs() - do NOT call it again!
-  
+
   //setup LEDs
   FastLED.addLeds<LED_TYPE,LED_PIN,COLOR_ORDER>(LEDs,NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(255);
@@ -444,7 +637,9 @@ void setup() {
   allTest();
   }
   fakeClock(2);  // blink 12:00 like old clocks once did
-
+  #if HAS_SOUNDDETECTOR
+    sampling_period_us = round(1000000 * (1.0 / SOUNDDETECTOR_SAMPLING_FREQ));
+  #endif
 
   //display "LoAd" while activating the websever
    allBlank();
@@ -465,35 +660,8 @@ void setup() {
   displayNumber(38,0,CRGB::Purple);  // E
   FastLED.show();
   if (firstRun) {delay(500);}
-  webLog("Initializing FileSystem...");
-  if (!FileFS.begin()){
-      webLog("FileFS Mount FAILED! Trying to format...");
-      // Try to format the filesystem on first boot
-      if (FileFS.format()) {
-          webLog("FileFS formatted successfully. Mounting...");
-          if (FileFS.begin()) {
-              webLog("FileFS mounted after format.");
-          } else {
-              webLog("ERROR: FileFS mount failed even after format");
-              //display "Err" if error
-              allBlank();
-              displayNumber(38,6,CRGB::Purple);  // E
-              displayNumber(83,4,CRGB::Purple);  // r
-              displayNumber(83,2,CRGB::Purple); // r
-              FastLED.show();
-              delay(500);
-          }
-      } else {
-          Serial.println(F("!FileFS format failed"));
-          //display "Err" if error
-          allBlank();
-          displayNumber(38,6,CRGB::Purple);  // E
-          displayNumber(83,4,CRGB::Purple);  // r
-          displayNumber(83,2,CRGB::Purple); // r
-          FastLED.show();
-          delay(500);
-      }
-  } else {
+  Serial.println(F("Inizializing FS..."));
+  if (FileFS.begin()){
       Serial.println(F("FileFS mounted correctly."));
       Serial.println("Total Bytes");
       Serial.println(FileFS.totalBytes());
@@ -502,6 +670,15 @@ void setup() {
       listDir(FileFS, "/", 0);
       listDir(FileFS, "/css/", 0);
       listDir(FileFS, "/js/", 0);
+  }else{
+      Serial.println(F("!An error occurred during FileFS mounting"));
+      //display "Err" if error
+      allBlank();
+      displayNumber(38,6,CRGB::Purple);  // E
+      displayNumber(83,4,CRGB::Purple);  // r
+      displayNumber(83,2,CRGB::Purple); // r
+      FastLED.show();
+      delay(500);
   }
 
   //display "SEtS"
@@ -512,32 +689,65 @@ void setup() {
   displayNumber(52,0,CRGB::Red);  // S
   FastLED.show();
   if (firstRun) {delay(500);}
-
-  // Ensure /settings/ directory exists
-  if (!FileFS.exists("/settings")) {
-    Serial.println("Creating /settings/ directory...");
-    if (FileFS.mkdir("/settings")) {
-      Serial.println("/settings/ directory created");
-    } else {
-      Serial.println("Failed to create /settings/ directory");
-    }
-  }
-
   Serial.println("list setting folder files");
   listDir(FileFS, "/settings/", 0);
   //load settings from nvram and flash
   Serial.println("load all settings from json file");
   getclockSettings("generic"); //load all settings from json file
+  
+  #if HAS_RTC
+  //display "rtc"
+  allBlank();
+  displayNumber(83,6,CRGB::Red);  // r
+  displayNumber(85,4,CRGB::Red);  // t
+  displayNumber(68,2,CRGB::Red); // c
+  FastLED.show();
+  if (firstRun) {delay(500);}
+    //init DS3231 RTC
+    if (! rtc.begin()) {
+      Serial.println("Couldn't find DS3231 RTC");
+      Serial.flush();
+      //display "Err"
+      allBlank();
+      displayNumber(38,6,CRGB::Red);  // E
+      displayNumber(83,4,CRGB::Red);  // r
+      displayNumber(83,2,CRGB::Red); // r
+      FastLED.show();
+      delay(1000);
+    //  abort();
+    }
+  #endif
 
-  // If settings file doesn't exist (first boot), save default values
-  if (!FileFS.exists("/settings/clockSettings-generic.json")) {
-    Serial.println("No settings file found - saving defaults");
-    updateSettingsRequired = 1;
-    // The auto-save timer will save after 3 seconds in loop()
-  }
 
+  #if HAS_SOUNDDETECTOR
+    //display "Snd"
+    allBlank(); 
+    displayNumber(52,5,CRGB::Red); // S
+    displayNumber(79,3,CRGB::Red);  // n
+    displayNumber(69,1,CRGB::Red);  // d
+    FastLED.show();
+    if (firstRun) {delay(500);}
+    // Initialize peaks to zero
+    for (byte band = 0; band < SOUNDDETECTOR_BANDS_WIDTH; band++) {
+        peak[band] = 0;
+        prevPeak[band] = 0;
+    }
+    i2sConfig();
+    i2sPins();
+  #endif
 
-
+  // init temp & humidity sensor
+  #if HAS_DHT
+    //display "dht"
+    allBlank();
+    displayNumber(69,6,CRGB::Red);  // d
+    displayNumber(73,4,CRGB::Red);  // h
+    displayNumber(85,2,CRGB::Red); // t
+    FastLED.show();
+    if (firstRun) {delay(500);}
+    Serial.println(F("DHTxx test!"));
+    dht.begin();
+  #endif
   
   //display "no AP" while activating the wifi
 
@@ -562,7 +772,7 @@ void setup() {
   if (firstRun) {delay(500);}
   Serial.println("Wifi Starting");
   WiFi.hostname(host); //set hostname
-  WiFi.macAddress(mac);
+
   // setup AutoConnect to control WiFi
   if (Portal.begin()) {
     Serial.println("WiFi Connected: " + WiFi.localIP().toString());
@@ -579,20 +789,6 @@ void setup() {
     FastLED.show();
     delay(1000);
     }
-    // Load MQTT settings and initialize both MQTT systems
-    setupMQTT();  // Loads MQTT settings from Preferences into mqttServer, mqttPort, mqttUser, mqttPassword
-
-    // Initialize Home Assistant MQTT with loaded credentials
-    if (mqttServer.length() > 0) {
-        Serial.println("Initializing Home Assistant MQTT...");
-        haMqtt.begin(mqttServer.c_str(), mqttPort, mqttUser.c_str(), mqttPassword.c_str());
-    } else {
-        Serial.println("MQTT not configured - skipping HA MQTT initialization");
-        // Use default local broker for testing
-        haMqtt.begin("192.168.50.11", 1883, "mqttUser", "mqttPassword");
-    }
-
-    
 
   //display "dnS" while activating the mdns
   allBlank();
@@ -643,9 +839,40 @@ void setup() {
       settimeofday(&now, NULL);
       fakeTime = 1;
     }
-    
-    
 
+  #if HAS_RTC
+    //was the internal RTC time set by the NTP server?, if not set it via the RTC DS3231 stored time, will be wrong if daylight savings time is active
+    if(!getLocalTime(&timeinfo) || fakeTime == 1){ 
+      struct tm tm;
+      DateTime now = rtc.now();
+      tm.tm_year = now.year() - 1900;
+      tm.tm_mon = now.month() - 1;
+      tm.tm_mday = now.day();
+      tm.tm_hour = now.hour();
+      tm.tm_min = now.minute();
+      tm.tm_sec = now.second();
+      time_t t = mktime(&tm);
+      printf("NTP server not found, setting localtime from DS3231: %s", asctime(&tm));
+      struct timeval now1 = { .tv_sec = t };
+      settimeofday(&now1, NULL);
+    }
+    //did the DS3231 lose power (battery dead/changed), if so, set from time recieved from the NTP above
+    if (rtc.lostPower() && fakeTime == 0) {
+      //display "bAtt" while if batt dead/changed
+      allBlank();
+      displayNumber(67,6,CRGB::Red);  // b
+      displayNumber(34,4,CRGB::Red);  // A
+      displayNumber(85,2,CRGB::Red); // t
+      displayNumber(85,0,CRGB::Red);  // t
+      FastLED.show();
+      if (firstRun) {delay(1000);}
+      Serial.println("DS3231's RTC lost power, setting the time via NTP!");
+      if(!getLocalTime(&timeinfo)){Serial.println("Error, no NTP Server found!");}
+      int tempyear = (timeinfo.tm_year +1900);
+      int tempmonth = (timeinfo.tm_mon + 1);
+      rtc.adjust(DateTime(tempyear, tempmonth, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+    }
+  #endif
 
   Serial.println("print time");
   printLocalTime(); 
@@ -680,15 +907,49 @@ void setup() {
    server.enableCrossOrigin(true);
   server.enableCORS(true);
 
+  // Explicit CORS preflight handling
+  server.on("/uploadSong", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "*");
+    server.send(204);
+  });
+
+  server.onNotFound([]() {
+    if (server.method() == HTTP_OPTIONS) {
+      server.sendHeader("Access-Control-Allow-Origin", "*");
+      server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+      server.sendHeader("Access-Control-Allow-Headers", "*");
+      server.send(204);
+      return;
+    }
+    server.send(404, "text/plain", "Not found");
+  });
+
   //Webpage Handlers for FileFS access to flash
   server.serveStatic("/", FileFS, "/index.html");  //send default webpage from root request
-  server.serveStatic("/", FileFS, "/", "max-age=86400");
-  // server.serveStatic("/", FileFS, "/", "no-cache, max-age=0"); //for debugging
+  //server.serveStatic("/", FileFS, "/", "max-age=86400");
+   server.serveStatic("/", FileFS, "/", "no-cache, max-age=0"); //for debugging
 
   //OTA firmware Upgrade Webpage Handlers
   Serial.println("OTA Available");
 
 
+  #if HAS_BUZZER
+    //display "Song" while loading the songs from flash
+    allBlank();
+    displayNumber(52,6,CRGB::Red);  // S
+    displayNumber(80,4,CRGB::Red);  // o
+    displayNumber(79,2,CRGB::Red); // n
+    displayNumber(72,0,CRGB::Red);  // g
+    FastLED.show();
+    //init rtttl (functions that play the alarms)
+    pinMode(BUZZER_PIN, OUTPUT);
+    rtttl::begin(BUZZER_PIN, "Intel:d=4,o=5,b=400:32p,d,g,d,2a");  //play mario sound and set initial brightness level
+    while( !rtttl::done() ){ rtttl::play();}
+    Serial.println("get list of songs");
+    getListOfSongs();
+  #endif
 
   
   //display "Schd" while loading the schedules from flash
@@ -699,22 +960,16 @@ void setup() {
   displayNumber(69,0,CRGB::Red);  // d
   FastLED.show();
   if (firstRun) {delay(500);}
-
-  // Ensure /scheduler/ directory exists
-  if (!FileFS.exists("/scheduler")) {
-    Serial.println("Creating /scheduler/ directory...");
-    if (FileFS.mkdir("/scheduler")) {
-      Serial.println("/scheduler/ directory created");
-    } else {
-      Serial.println("Failed to create /scheduler/ directory");
-    }
-  }
-
   listDir(FileFS, "/scheduler/", 0);
   Serial.println("load array of schedule files on drive ");
   createSchedulesArray();  //load array of schedule files on drive
   Serial.println("print out schedule array");
   processSchedules(0);  //print out schedule array
+
+  Serial.println("start of job queue");
+  jobQueue = xQueueCreate(30, sizeof(String *));
+  Serial.println("start of xTaskCreatePinnedToCore");
+  xTaskCreatePinnedToCore(Task1code, "Task1", 10000, NULL, 0, &Task1, 0);
 
   //display "donE" after setup
   allBlank();
@@ -723,7 +978,10 @@ void setup() {
   displayNumber(79,2,CRGB::Red); // n
   displayNumber(38,0,CRGB::Red);  // E
   FastLED.show();
-  applyBrightness();
+  for (int i = 0; i < PHOTO_SAMPLES; i++) {
+ getsamplePhoto(); 
+  }
+   GetBrightnessLevel();
   if (firstRun) {delay(500);}
   allBlank();
 
@@ -740,7 +998,64 @@ void setup() {
 }
   allBlank();
   Serial.println("end of Setup");
+  if (spotlightsColorSettings == 5 ){ updateRainForecast(); }
+  if ((spotlightsColorSettings == 6) || (scrollOptions9 == 1 && clockMode == 11)){ fetchTides(); processCurrentTide();}
 }    //end of Setup()
+
+void Task1code(void * parameter) {
+  unsigned long lastTime = 0;
+  const unsigned long weatherTimerDelay = 30UL * 60UL * 1000UL;  // 30 min
+  getRemoteWeather();
+  while(true) {
+    #if HAS_BUZZER
+
+        if (xQueueReceive(jobQueue, songTaskbuffer, (TickType_t)10)) {
+          String job = String(songTaskbuffer);
+          Serial.print("job ");
+          Serial.println(job);
+          playRTTTLsong(job, 1);
+        } 
+    #endif
+    if ((millis() - lastTime) > weatherTimerDelay) {
+      getRemoteWeather();
+      lastTime = millis();
+    }  
+  }
+}
+
+void getRemoteWeather() {
+  #if HAS_USWEATHER
+    getNoaaWeather();
+    outdoorTemp = noaaTemp;
+    outdoorHumidity = noaaHumidity;
+    #endif
+
+  #if HAS_ONLINEWEATHER
+    if (WiFi.status() == WL_CONNECTED && apikey && latitude && longitude) {
+      HTTPClient http;
+      String serverPath = String("http://api.openweathermap.org/data/2.5/weather?lat=") + latitude + String("&lon=") + longitude + String("&APPID=") + apikey + String("&units=imperial");
+      Serial.println(serverPath);
+      http.begin(serverPath.c_str());
+      int httpResponseCode = http.GET();
+      if (httpResponseCode > 0) {
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+        DynamicJsonDocument payload(2048);
+        deserializeJson(payload, http.getStream());
+        JsonObject main = payload["main"].as<JsonObject>();
+        outdoorTemp = main["temp"].as<String>().toFloat();
+        outdoorHumidity = main["humidity"].as<String>().toFloat();
+      } else {
+        Serial.print("Error code: ");
+        Serial.println(httpResponseCode);
+      }
+      // Free resources
+      http.end();
+      Serial.printf("OpenWeatherMap.org → Temp: %f°F, Humidity: %f%%\n", outdoorTemp, outdoorHumidity);
+  }
+  #endif
+  
+}
 
 void loop(){
   
@@ -778,39 +1093,7 @@ void loop(){
      //   Serial.println("Wi-Fi connection is successful ");
     // Your other code logic can go here
   }
-  haMqtt.loop();
-  haSyncState();
 
-  // Handle MQTT connection and messages
-  if (!mqttClient.connected()) {
-    unsigned long now = millis();
-    if (now - lastMqttReconnectAttempt > 5000) {  // Try reconnecting every 5 seconds
-      lastMqttReconnectAttempt = now;
-      mqttReconnect();
-    }
-  } else {
-    mqttClient.loop();  // Process MQTT messages
-  }
-
-  // Auto-save settings after 3 seconds of last change to prevent data loss
-  if (updateSettingsRequired == 1) {
-    unsigned long now = millis();
-    if (settingsSaveTimer == 0) {
-      // First time flag is set - start timer
-      settingsSaveTimer = now;
-      webLog("Settings changed - will save in 3 seconds...");
-    } else if ((now - settingsSaveTimer) >= 3000) {
-      // 3 seconds have passed - save now
-      webLog("Auto-saving settings now...");
-      saveclockSettings("generic");
-      updateSettingsRequired = 0;
-      settingsSaveTimer = 0;
-      webLog("Settings saved successfully");
-    }
-  } else {
-    // Reset timer if flag is cleared
-    settingsSaveTimer = 0;
-  }
   //Change Frequency so as to not use hard-coded delays
   unsigned long currentMillis = millis();  
   //run everything inside here every second
@@ -831,33 +1114,37 @@ void loop(){
     int currentTimeMonth = timeinfo.tm_mon;
 
     checkSleepTimer();  //time to sleep?
-    // MQTT handled by ArduinoHA
-    
+
     //if ((currentTimeHour == 23 && currentTimeMin == 11 && timeinfo.tm_sec == 0 && clockDisplayType != 1) || (currentTimeHour == 11 && currentTimeMin == 11 && timeinfo.tm_sec == 0)) { scroll("MAkE A WISH"); }  //at 1111 make a wish
  
     if (abs(currentTimeMin - previousTimeMin) >= 1) { //run every minute
       previousTimeMin = currentTimeMin; 
       randomMinPassed = 1;
       minutesUptime += 1; 
-      applyBrightness();
+      GetBrightnessLevel(); 
       processSchedules(0);  //see if there's a timer
       if (scrollFrequency == 1 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 1 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every minute
 
     if ((m2 == 0 || m2 == 5) && (secs == 0)) { //run every 5 minutes
       if (scrollFrequency == 2 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 2 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every 5 minutes
 
     if ((m2 == 0) && (secs == 0)) { //run every 10 minutes
       if (scrollFrequency == 3 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 3 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every 10 minutes
 
     if (((m1 == 0 && m2 == 0) || (m1 == 1 && m2 == 5) || (m1 == 3 && m2 == 0) || (m1 == 4 && m2 == 5)) && (secs == 0)) { //run every 15 minutes
       if (scrollFrequency == 4 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 4 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every 15 minutes
 
     if (((m1 == 0 && m2 == 0) || (m1 == 3 && m2 == 0)) && (secs == 0)) { //run every 30 minutes
       if (scrollFrequency == 5 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 5 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every 30 minutes
       
     if (abs(currentTimeHour - previousTimeHour) >= 1) { //run every hour
@@ -865,20 +1152,31 @@ void loop(){
       previousTimeHour = currentTimeHour; 
       randomHourPassed = 1;
       hoursUptime += 1;
+      if (spotlightsColorSettings == 5 ){ updateRainForecast(); }
+      if ((spotlightsColorSettings == 6) || (scrollOptions9 == 1 && clockMode == 11)){ processCurrentTide();}
       if (scrollFrequency == 6 && (suspendType == 0 || isAsleep == 0) && scrollOverride == 1 && ((clockMode != 11) && (clockMode != 1) && (clockMode != 4))) {displayScrollMode();}
+      if (scrollFrequency == 6 && randomSpectrumMode == 1 && clockMode == 9) {allBlank(); spectrumMode = random(11);}
       } //end of run every hour
       
     if (abs(currentTimeDay - previousTimeDay) >= 1) { 
         previousTimeDay = currentTimeDay; 
         randomDayPassed = 1; 
         configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+        if (spotlightsColorSettings == 5 ){ updateRainForecast(); }
+        if ((spotlightsColorSettings == 6) || (scrollOptions9 == 1 && clockMode == 11)){ fetchTides(); processCurrentTide();}
+        #if HAS_RTC
+          int tempyear = (timeinfo.tm_year +1900);
+          int tempmonth = (timeinfo.tm_mon + 1);
+          rtc.adjust(DateTime(tempyear, tempmonth, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+        #endif
         daysUptime = daysUptime + 1;
      }
+    if (abs(currentTimeWeek - previousTimeWeek) >= 1) { previousTimeWeek = currentTimeWeek; randomWeekPassed = 1;if (spotlightsColorSettings == 5 ){ updateRainForecast(); }}
     
     if (abs(currentTimeMonth - previousTimeMonth) >= 1) { previousTimeMonth = currentTimeMonth; randomMonthPassed = 1;}
 
     if (realtimeMode == 0) {    //give autodim sensors some CPU time, update display
-       //applyBrightness();        
+       //GetBrightnessLevel();        
        //FastLED.show();
     }
     //give the various clock modes CPU time every 1 seconds
@@ -886,6 +1184,8 @@ void loop(){
        displayTimeMode();
     }  else if (clockMode == 1) {
        displayCountdownMode();
+    }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 2) {
+       displayTemperatureMode();  
     }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 3) {
        displayScoreboardMode();  
     }  else if (clockMode == 4) {
@@ -896,6 +1196,10 @@ void loop(){
        //notused
     }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 7) {
        displayDateMode();         
+    }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 8) {
+       displayHumidityMode();    
+    }  else if (clockMode == 9) {
+      //spectrum mode
     }  else if (clockMode == 10) {
       //display off
     }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 11) {
@@ -908,11 +1212,37 @@ void loop(){
     randomWeekPassed = 0; 
     randomMonthPassed = 0;
     
-    applyBrightness();
+    if (brightness != 10) {  //if not set to auto-dim just use user set brightness
+      FastLED.setBrightness(brightness);
+    } else if (brightness == 10) {  //auto-dim use the value from above
+        #if HAS_PHOTOSENSOR
+          FastLED.setBrightness(lightSensorValue);
+        #endif  
+    } 
   }
 
   displayRealtimeMode();  //always run outside time loop for speed, but only really show when it's needed
 }  // end of main loop
+
+void getsamplePhoto(){
+#if HAS_PHOTOSENSOR
+// one-time seed
+if (!brightnessInited) {
+  uint16_t seed = analogRead(PHOTORESISTER_PIN);
+  brightnessSum = (long)seed * PHOTO_SAMPLES;
+  for (int i = 0; i < PHOTO_SAMPLES; i++)
+    photoresisterReadings[i] = seed;
+  readIndex       = 0;
+  brightnessInited = true;
+}
+// rolling-sum update: drop old, read new, add new
+uint16_t oldVal = photoresisterReadings[readIndex];
+uint16_t newVal = analogRead(PHOTORESISTER_PIN);
+brightnessSum  += (long)newVal - oldVal;
+photoresisterReadings[readIndex] = newVal;
+readIndex = (readIndex + 1) % PHOTO_SAMPLES;
+#endif 
+}
 
 void displayTimeMode() {  //main clock function
   currentMode = 0;
@@ -1145,6 +1475,230 @@ void displayDateMode() {  //main date function
   } 
 } // end of update date
 
+void displayTemperatureMode() {   //miain temp function
+  static int countFlip = 1;
+  currentMode = 0;
+  #if HAS_DHT
+    float humidTemp = dht.readHumidity();        // read humidity
+    float sensorTemp = dht.readTemperature();     // read temperature
+    float f = dht.readTemperature(true);
+    // float saturationVaporPressure = 6.1078 * pow(10, (7.5 * sensorTemp / (237.3 + sensorTemp)));  // Calculate saturation vapor pressure
+    // float vaporPressure = saturationVaporPressure * (humidTemp / 100.0);  // Calculate vapor pressure
+    // float absoluteHumidity = 217 * vaporPressure / (273.15 + sensorTemp);  // Calculate absolute humidity
+    // float humidityRatio = 0.622 * vaporPressure / (101325 - vaporPressure);
+    float heatIndex = -8.784695 + 1.61139411 * sensorTemp + 2.338549 * humidTemp + -0.14611605 * sensorTemp * humidTemp + -0.01230809 * pow(sensorTemp, 2) + -0.01642482 * pow(humidTemp, 2) + 0.00221173 * pow(sensorTemp, 2) * humidTemp + 0.00072546 * sensorTemp * pow(humidTemp, 2) + -0.00000358 * pow(sensorTemp, 2) * pow(humidTemp, 2);
+    heatIndex += altitudeLocal * 0.0065;  // Adjust heat index based on altitude
+    sensorTemp = heatIndex;
+    if (isnan(humidTemp) || isnan(sensorTemp) || isnan(f)) {
+      Serial.println(F("Failed to read from DHT sensor!"));
+      return;
+    }
+    float correctedTemp = sensorTemp + temperatureCorrection;
+    if (temperatureSymbol == 39) {  correctedTemp = ((sensorTemp * 1.8000) + 32) + temperatureCorrection; }
+  #else
+    float h = 00.00;        // fake humidity
+    float sensorTemp = 0;     // fake temperature
+    float correctedTemp = sensorTemp;
+  #endif
+  #if HAS_USWEATHER || HAS_ONLINEWEATHER
+    if (temperature_outdoor_enable == true) {   //if outdoor temp show both outdoor and indoor
+      if (countFlip > 10) {
+        if (temperatureSymbol != 39) {  
+          correctedTemp = ((outdoorTemp - 32) / 1.8); 
+        } else {
+          correctedTemp = outdoorTemp;
+        }
+      }
+      if (countFlip > 20) {
+        #if !HAS_DHT   //if outdoor temp and no DHT
+          if (temperatureSymbol != 39) {  
+            correctedTemp = ((outdoorTemp - 32) / 1.8); 
+          } else {
+            correctedTemp = outdoorTemp;
+          }
+        #endif
+        countFlip = 0;
+      }
+      countFlip++;
+    }
+    #endif
+  byte t1 = 0;
+  byte t2 = 0;
+  int tempDecimal = correctedTemp * 10;
+  if (correctedTemp >= 100) {
+    int tempHundred = correctedTemp / 10;
+    t1 = tempHundred / 10;
+    t2 = tempHundred % 10;
+    } else {
+    t2 = int(correctedTemp) / 10;
+    }
+  byte t3 = int(correctedTemp) % 10;
+  byte t4 = tempDecimal % 10;
+  if (tempColorSettings == 0) {tempColor = CRGB(tempColorValue);  typeColor = CRGB(typeColorValue); degreeColor = CRGB(degreeColorValue);}
+  if (tempColorSettings == 1) {tempColor = CRGB(tempColorValue);  typeColor = tempColor; degreeColor = CRGB(degreeColorValue);}
+  if ((tempColorSettings == 2 && pastelColors == 0) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { tempColor = CHSV(random(0, 255), 255, 255);  typeColor = CHSV(random(0, 255), 255, 255);degreeColor = CHSV(random(0, 255), 255, 255);}
+  if ((tempColorSettings == 2 && pastelColors == 1) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { tempColor = CRGB(random(0, 255), random(0, 255), random(0, 255));  typeColor = CRGB(random(0, 255), random(0, 255), random(0, 255));degreeColor = CRGB(random(0, 255), random(0, 255), random(0, 255));}
+  if ((tempColorSettings == 3 && pastelColors == 0) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { tempColor = CHSV(random(0, 255), 255, 255);  typeColor = tempColor; degreeColor = tempColor;}
+  if ((tempColorSettings == 3 && pastelColors == 1) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { tempColor = CRGB(random(0, 255), random(0, 255), random(0, 255));  typeColor = tempColor; degreeColor = tempColor;}
+    
+//0-Temperature with Degree and Type (79°F), 1-Temperature with just Type (79 F), 2-Temperature with just Degree (79°), 3-Temperature with Decimal (79.9), 4-Just Temperature (79)
+  if ((tempDisplayType == 0) && (correctedTemp < 100)) {  //0-Temperature with Degree and Type (79°F) under 100 only
+    displayNumber(t2,6,tempColor);
+    displayNumber(t3,4,tempColor);
+    displayNumber(26,2,degreeColor);
+    displayNumber(temperatureSymbol,0,typeColor);
+  }
+  if ((tempDisplayType == 1) && (correctedTemp < 100)) {   // 1-Temperature with just Type (79 F) under 100
+    displayNumber(t2,5,tempColor);
+    displayNumber(t3,3,tempColor);
+    displayNumber(temperatureSymbol,1,typeColor);
+  }
+  if (((tempDisplayType == 1) || (tempDisplayType == 0)) && (correctedTemp >= 100)) {   // 1-Temperature with just Type (79 F) over 100
+    displayNumber(t1,6,tempColor);
+    displayNumber(t2,4,tempColor);
+    displayNumber(t3,2,tempColor);
+    displayNumber(temperatureSymbol,0,typeColor);
+  }
+  if ((tempDisplayType == 2) && (correctedTemp < 100)) {  //2-Temperature with just Degree (79°) under 100
+    displayNumber(t2,5,tempColor);
+    displayNumber(t3,3,tempColor);
+    displayNumber(26,1,degreeColor);
+  }
+  if ((tempDisplayType == 2) && (correctedTemp >= 100)) {  //2-Temperature with just Degree (79°) over 100
+    displayNumber(t1,6,tempColor);
+    displayNumber(t2,4,tempColor);
+    displayNumber(t3,2,tempColor);
+    displayNumber(26,0,degreeColor);
+  }
+  if ((tempDisplayType == 3) && (correctedTemp < 100)) {   //3-Temperature with Decimal (79.9) under 100
+    displayNumber(t2,6,tempColor);
+    displayNumber(t3,4,tempColor);
+    displayNumber(t4,1,typeColor); 
+    if (tempColorSettings == 4 && pastelColors == 0){ degreeColor = CHSV(random(0, 255), 255, 255); }
+    if (tempColorSettings == 4 && pastelColors == 1){ degreeColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(12*LEDS_PER_SEGMENT); i<(13*LEDS_PER_SEGMENT); i++) { LEDs[i] = degreeColor;}  //period goes here
+  }
+  if ((tempDisplayType == 3) && (correctedTemp >= 100)) {   //3-Temperature with Decimal (79.9) over 100
+    displayNumber(t2,5,tempColor);
+    displayNumber(t3,3,tempColor);
+    displayNumber(t4,0,typeColor);
+    tinytempColor = tempColor;
+    if (tempColorSettings == 4 && pastelColors == 0){ tinytempColor = CHSV(random(0, 255), 255, 255); }
+    if (tempColorSettings == 4 && pastelColors == 1){ tinytempColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(32*LEDS_PER_SEGMENT); i<(33*LEDS_PER_SEGMENT); i++) { LEDs[i] = tinytempColor;}  //1xx split across 2 for color reasons
+    if (tempColorSettings == 4 && pastelColors == 0){ tinytempColor = CHSV(random(0, 255), 255, 255); }
+    if (tempColorSettings == 4 && pastelColors == 1){ tinytempColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(33*LEDS_PER_SEGMENT); i<(34*LEDS_PER_SEGMENT); i++) { LEDs[i] = tinytempColor;}  //1xx split across 2 for color reasons
+    if (tempColorSettings == 4 && pastelColors == 0){ degreeColor = CHSV(random(0, 255), 255, 255); }
+    if (tempColorSettings == 4 && pastelColors == 1){ degreeColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(10*LEDS_PER_SEGMENT); i<(11*LEDS_PER_SEGMENT); i++) { LEDs[i] = degreeColor;}  //period goes here
+  }
+  if ((tempDisplayType == 4) && (correctedTemp < 100)) {  //4-Just Temperature (79) under 100
+    displayNumber(t2,4,tempColor);
+    displayNumber(t3,2,typeColor);
+  }
+  if ((tempDisplayType == 4) && (correctedTemp >= 100)) {  //4-Just Temperature (79) over 100
+    displayNumber(t1,5,degreeColor);
+    displayNumber(t2,3,tempColor);
+    displayNumber(t3,1,typeColor);
+  } 
+}//end of temp settings
+
+
+void displayHumidityMode() {   //main humidity function
+  static int countFlip = 1;
+  currentMode = 0;
+  #if HAS_DHT
+    float sensorHumi = dht.readHumidity();        // read humidity
+    float t = dht.readTemperature();     // read temperature
+    float f = dht.readTemperature(true);
+
+    if (isnan(sensorHumi) || isnan(t) || isnan(f)) {
+      Serial.println(F("Failed to read from DHT sensor!"));
+      return;
+    }
+  #else
+    float sensorHumi = 00.00;        // fake humidity
+    float t = 00.00;     // fake temperature
+  #endif
+  #if HAS_USWEATHER || HAS_ONLINEWEATHER
+    if (humidity_outdoor_enable == true) {  //if outdoor humid also show dht
+      if (countFlip > 10) {
+        sensorHumi = outdoorHumidity;
+      }
+      if (countFlip > 20) {  //no dht just show dht
+        #if !HAS_DHT
+          sensorHumi = outdoorHumidity;
+        #endif
+        countFlip = 0;
+      }
+      countFlip++;
+    }
+    #endif
+  byte t1 = 0;
+  byte t2 = 0;
+  int humiDecimal = sensorHumi * 10;
+  if (sensorHumi >= 100) {
+    int humiHundred = sensorHumi / 10;
+    t1 = humiHundred / 10;
+    t2 = humiHundred % 10;
+    } else {
+    t2 = int(sensorHumi) / 10;
+    }
+  byte t3 = int(sensorHumi) % 10;
+  byte t4 = humiDecimal % 10;
+  if (humiColorSettings == 0) {humiColor = CRGB(humiColorValue);  humiSymbolColor = CRGB(humiSymbolColorValue); humiDecimalColor = CRGB(humiDecimalColorValue);}
+  if (humiColorSettings == 1) {humiColor = CRGB(humiColorValue);  humiSymbolColor = humiColor; humiDecimalColor = CRGB(humiDecimalColorValue);}
+  if ((humiColorSettings == 2 && pastelColors == 0) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { humiColor = CHSV(random(0, 255), 255, 255);  humiSymbolColor = CHSV(random(0, 255), 255, 255);humiDecimalColor = CHSV(random(0, 255), 255, 255); }
+  if ((humiColorSettings == 2 && pastelColors == 1) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { humiColor = CRGB(random(0, 255), random(0, 255), random(0, 255));  humiSymbolColor = CRGB(random(0, 255), random(0, 255), random(0, 255));humiDecimalColor = CRGB(random(0, 255), random(0, 255), random(0, 255));}
+  if ((humiColorSettings == 3 && pastelColors == 0) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { humiColor = CHSV(random(0, 255), 255, 255);  humiSymbolColor = humiColor; humiDecimalColor = humiColor;}
+  if ((humiColorSettings == 3 && pastelColors == 1) && ( (ColorChangeFrequency == 0 ) || (ColorChangeFrequency == 1 && randomMinPassed == 1) || (ColorChangeFrequency == 2 && randomHourPassed == 1) || (ColorChangeFrequency == 3 && randomDayPassed == 1) || (ColorChangeFrequency == 4 && randomWeekPassed == 1) || (ColorChangeFrequency == 5 && randomMonthPassed == 1) )) { humiColor = CRGB(random(0, 255), random(0, 255), random(0, 255));  humiSymbolColor = humiColor; humiDecimalColor = humiColor;}
+  if ((humiDisplayType == 0) && (sensorHumi < 100)) {   //0-Humidity with Symbol (34 H) under 100
+    displayNumber(t2,5,humiColor);
+    displayNumber(t3,3,humiColor);
+    displayNumber(41,1,humiSymbolColor); //H(umitidy
+  }
+  if ((humiDisplayType == 0) && (sensorHumi >= 100)) {   //0-Humidity with Symbol (34 H) over 100
+    displayNumber(t1,6,humiColor);
+    displayNumber(t2,4,humiColor);
+    displayNumber(t3,2,humiColor);
+    displayNumber(41,0,humiSymbolColor); //H(umitidy
+  }
+  if ((humiDisplayType == 1) && (sensorHumi < 100)) {   //1-Humidity with Decimal (34.9) under 100
+    displayNumber(t2,6,humiColor);
+    displayNumber(t3,4,humiColor);
+    displayNumber(t4,1,humiSymbolColor);
+    if (humiColorSettings == 4 && pastelColors == 0){ humiDecimalColor = CHSV(random(0, 255), 255, 255); }
+    if (humiColorSettings == 4 && pastelColors == 1){ humiDecimalColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(12*LEDS_PER_SEGMENT); i<(13*LEDS_PER_SEGMENT); i++) { LEDs[i] = humiDecimalColor;}  //period goes here
+  }
+  if ((humiDisplayType == 1) && (sensorHumi >= 100)) {   //1-Humidity with Decimal (34.9) over 100
+    displayNumber(t2,5,humiColor);
+    displayNumber(t3,3,humiColor);
+    displayNumber(t4,0,humiSymbolColor);
+    tinyhumiColor = humiColor;
+    if (humiColorSettings == 4 && pastelColors == 0){ tinyhumiColor = CHSV(random(0, 255), 255, 255); }
+    if (humiColorSettings == 4 && pastelColors == 1){ tinyhumiColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(32*LEDS_PER_SEGMENT); i<(33*LEDS_PER_SEGMENT); i++) { LEDs[i] = tinyhumiColor;}  //1xx split across 2 for color reasons
+    if (humiColorSettings == 4 && pastelColors == 0){ tinyhumiColor = CHSV(random(0, 255), 255, 255); }
+    if (humiColorSettings == 4 && pastelColors == 1){ tinyhumiColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(33*LEDS_PER_SEGMENT); i<(34*LEDS_PER_SEGMENT); i++) { LEDs[i] = tinyhumiColor;} //1xx
+    if (humiColorSettings == 4 && pastelColors == 0){ humiDecimalColor = CHSV(random(0, 255), 255, 255); }
+    if (humiColorSettings == 4 && pastelColors == 1){ humiDecimalColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
+    for (int i=(10*LEDS_PER_SEGMENT); i<(11*LEDS_PER_SEGMENT); i++) { LEDs[i] = humiDecimalColor;}   //period goes here
+  }
+  if ((humiDisplayType == 2) && (sensorHumi < 100)) {  //2-Just Humidity (79) under 100
+    displayNumber(t2,4,humiColor);
+    displayNumber(t3,2,humiSymbolColor);
+  }
+  if ((humiDisplayType == 2) && (sensorHumi >= 100)) {  //2-Just Humidity (79) over 100
+    displayNumber(t1,5,humiDecimalColor);
+    displayNumber(t2,3,humiColor);
+    displayNumber(t3,1,humiSymbolColor);
+  }
+}//end of update humidity
+
+
 void displayScrollMode(){   //scrollmode for displaying clock things not just text
   currentMode = 0;
   if (realtimeMode == 0) {
@@ -1152,6 +1706,9 @@ void displayScrollMode(){   //scrollmode for displaying clock things not just te
     char strTime[10];
     char strDate[10];
     char strYear[10];
+    char strTemp[25];
+    char strOutdoorTemp[25];
+    char strHumitidy[10];
     char strIPaddy[20];
     char DOW[10]; 
     int hour = timeinfo.tm_hour;
@@ -1159,7 +1716,18 @@ void displayScrollMode(){   //scrollmode for displaying clock things not just te
     int mday = timeinfo.tm_mday;
     int mont = timeinfo.tm_mon + 1;
     int year = timeinfo.tm_year +1900;
+    #if HAS_DHT
+      float h = dht.readHumidity();        // read humidity
+      float sensorTemp = dht.readTemperature();     // read temperature
+      float f = dht.readTemperature(true);
+      if (isnan(h) || isnan(sensorTemp) || isnan(f)) {  Serial.println(F("Failed to read from DHT sensor!"));  return;  }
+    #else
+      float h = 00.00;        // fake humidity
+      float sensorTemp = 00.00;     // fake temperature
+    #endif
+    float correctedTemp = sensorTemp + temperatureCorrection;
 
+    if (temperatureSymbol == 39) {  correctedTemp = ((sensorTemp * 1.8000) + 32) + temperatureCorrection; }
     if (timeinfo.tm_wday == 1)    {sprintf(DOW,"%s","Mon    ");}
     if (timeinfo.tm_wday == 2)    {sprintf(DOW,"%s","tUES    ");}
     if (timeinfo.tm_wday == 3)    {sprintf(DOW,"%s","WEd    ");}
@@ -1170,18 +1738,40 @@ void displayScrollMode(){   //scrollmode for displaying clock things not just te
     sprintf(strTime, "%.2d%.2d    ", hour, mins);  //1111
     sprintf(strDate, "%.2d-%.2d    ", mont, mday);  //10-22
     sprintf(strYear, "%d    ", year);  //2021
+    #if HAS_USWEATHER || HAS_ONLINEWEATHER
+      if (temperature_outdoor_enable == true && outdoorTemp != -500) {
+        sprintf(strTemp, "%.1f : %.1f^F     ", correctedTemp, outdoorTemp);
+      } else {
+        sprintf(strTemp, "%.1f^F    ", correctedTemp );  //98_6 ^F
+      }
+      if (humidity_outdoor_enable == true && outdoorHumidity != -1) {
+        sprintf(strHumitidy, "%.0f : %.0fH    ", h, outdoorHumidity);  //48_6 H
+      } else {
+        sprintf(strHumitidy, "%.0fH    ", h);  //48_6 H
+      }
+      #else
+      sprintf(strTemp, "%.1f^F    ", correctedTemp );  //98_6 ^F
+      sprintf(strHumitidy, "%.0fH    ", h);  //48_6 H
+      #endif
     sprintf(strIPaddy, "%s", WiFi.localIP().toString().c_str());  //192_168_0_10
     String processedText;
-    processedText.reserve(256);      // pre-allocates to avoid reallocs
+    processedText.reserve(512);      // pre-allocates to avoid reallocs
 
     if (scrollOptions1) processedText += String(strTime)        + "  ";
     if (scrollOptions2) processedText += String(DOW)            + "  ";
     if (scrollOptions3) processedText += String(strDate)        + "  ";
     if (scrollOptions4) processedText += String(strYear)        + "  ";
+    if (scrollOptions5) processedText += String(strTemp)        + "  ";
+    if (scrollOptions6) processedText += String(strHumitidy)    + "  ";
+    #if HAS_USWEATHER
+      if (scrollOptions9) processedText += String(textTides)      + "  ";
+      #endif
     if (scrollOptions7) processedText += scrollText             + "    ";
     if (scrollOptions8) processedText += String(strIPaddy)      + "  ";
+    // if none selected, fall back to user scrollText
+    if (!(scrollOptions1 || scrollOptions2 || scrollOptions3 || scrollOptions4 || scrollOptions5 || scrollOptions6 || scrollOptions7 || scrollOptions8 || scrollOptions9)) { processedText += scrollText;}
     scroll(processedText);  
-  }
+    }
 }
 
 void displayCountdownMode() {     //main countdown function
@@ -1283,6 +1873,10 @@ void displayLightshowMode() {
 }
 
 void displayRealtimeMode(){   //main RealtimeModes function, always is running
+  getsamplePhoto(); 
+  #if HAS_SOUNDDETECTOR
+    if ( (suspendType == 0 || isAsleep == 0) && clockMode == 9 && realtimeMode == 1) {SpectrumAnalyzer(); }
+  #endif
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 1) {EVERY_N_MILLISECONDS(30) {Twinkles();FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 2) {Rainbow();FastLED.show();}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 3) {EVERY_N_MILLISECONDS(100) {GreenMatrix();}}
@@ -1294,6 +1888,445 @@ void displayRealtimeMode(){   //main RealtimeModes function, always is running
 
 
 
+#if HAS_SOUNDDETECTOR
+void rainbowBars(int band, int barHeight) {
+  int xStart = LEDS_PER_SEGMENT * 2 * band;
+    for (int y = 0; y < SOUNDDETECTOR_BANDS_HEIGHT; y++) {
+      if ( barHeight >= y)  
+        LEDs[ANALYZER[xStart + y]] = CHSV(band * (255 / SOUNDDETECTOR_BANDS_WIDTH), 255, 255);
+      else
+        LEDs[ANALYZER[xStart + y]] = CRGB::Black;  
+    }
+}
+
+void purpleBars(int band, int barHeight) {
+  int xStart = LEDS_PER_SEGMENT * 2 * band;
+    for (int y = 0; y < SOUNDDETECTOR_BANDS_HEIGHT; y++) {
+      if ( barHeight >= y)  
+        LEDs[ANALYZER[xStart + y]] = ColorFromPalette(purplePal, y * (255 / (barHeight + 1)));
+      else
+        LEDs[ANALYZER[xStart + y]] = CRGB::Black;  
+    }
+}
+
+void fireBars(int band, int barHeight) {
+  int xStart = LEDS_PER_SEGMENT * 2 * band;
+    for (int y = 0; y < SOUNDDETECTOR_BANDS_HEIGHT; y++) {
+      if ( barHeight >= y)  
+        LEDs[ANALYZER[xStart + y]] = ColorFromPalette(heaterPal, y * (255 / (barHeight + 1)));
+      else
+        LEDs[ANALYZER[xStart + y]] = CRGB::Black;  
+    }
+}
+
+void changingBars(int band, int barHeight) {
+  int xStart = LEDS_PER_SEGMENT * 2 * band;
+    for (int y = 0; y < SOUNDDETECTOR_BANDS_HEIGHT; y++) {
+      if ( barHeight >= y)  
+        LEDs[ANALYZER[xStart + y]] = CHSV(y * (255 / (LEDS_PER_SEGMENT*2)) + colorTimer, 255, 255);
+      else
+        LEDs[ANALYZER[xStart + y]] = CRGB::Black;  
+    }
+}
+
+void centerBars(int band, int barHeight) {
+    int xStart = LEDS_PER_SEGMENT * 2 * band;
+    int totalHeight = LEDS_PER_SEGMENT * 2;
+    // Clear the entire bar area first
+    for (int y = 0; y < totalHeight; y++) {
+        LEDs[ANALYZER[xStart + y]] = CRGB::Black;
+    }
+    if (barHeight % 2 == 0) barHeight--;
+    int yStart = (totalHeight - barHeight) / 2;
+    // Draw the bar
+    for (int y = yStart; y < yStart + barHeight; y++) {
+        int colorIndex = constrain((y - yStart) * (255 / barHeight), 0, 255);
+        LEDs[ANALYZER[xStart + y]] = spectrumColor;
+    }
+}
+
+void whitePeak(int band) {
+    int xStart = LEDS_PER_SEGMENT * 2 * band;
+    int peakHeight = peak[band];
+    // Clear the previous peak LED
+    LEDs[ANALYZER[xStart + prevPeak[band]]] = CRGB::Black;
+    // Draw the new peak
+    LEDs[ANALYZER[xStart + peakHeight]] = CHSV(0, 0, 255);
+    // Update the previous peak position
+    prevPeak[band] = peakHeight;
+}
+
+void outrunPeak(int band) {
+    int xStart = LEDS_PER_SEGMENT * 2 * band;
+    int peakHeight = peak[band];
+    // Clear the previous peak LED
+    LEDs[ANALYZER[xStart + prevPeak[band]]] = CRGB::Black;
+    // Draw the new peak
+    LEDs[ANALYZER[xStart + peakHeight]] = ColorFromPalette(outrunPal, peakHeight * (255 / (LEDS_PER_SEGMENT * 2)));
+    // Update the previous peak position
+    prevPeak[band] = peakHeight;
+}
+
+void waterfall(int band) {
+    int totalHeight = LEDS_PER_SEGMENT * 2;
+    int xStart = totalHeight * band;
+    // Move bar up
+    for (int y = totalHeight - 1; y > 0; y--) {
+        int indexTo = xStart + y;
+        int indexFrom = xStart + y - 1;
+        // Check for out-of-bounds access
+        if (indexTo >= ANALYZER_SIZE || indexFrom >= ANALYZER_SIZE) {
+            Serial.println("Index out of bounds!");
+            continue; // Skip to avoid crashing
+        }
+        LEDs[ANALYZER[indexTo]] = LEDs[ANALYZER[indexFrom]];
+    }
+    // Map band value to hue
+    int hue = constrain(map(SOUNDDETECTOR_bandValues[band], 0, SOUNDDETECTOR_BANDS_HEIGHT, 160, 0), 0, 160);
+    // Draw bottom point
+    LEDs[ANALYZER[xStart]] = CHSV(hue, 255, 255);
+}
+
+void i2sConfig() {
+  const i2s_config_t i2s_config = {
+    .mode               = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate        = SOUNDDETECTOR_SAMPLING_FREQ,
+    .bits_per_sample    = i2s_bits_per_sample_t(SOUNDDETECTOR_BITS_PER_SAMPLE),
+    .channel_format     = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,  // or STAND_MSB if you need MSB-first
+    .intr_alloc_flags   = 0,
+    .dma_buf_count      = 8,
+    .dma_buf_len        = SOUNDDETECTOR_SAMPLES,
+    .use_apll           = false
+  };
+  i2s_driver_install(SOUNDDETECTOR_I2S_PORT, &i2s_config, 0, NULL);
+  Serial.println("I2S Config Setup");
+}
+
+void i2sPins() {
+  const i2s_pin_config_t pin_config = {
+    .bck_io_num = SOUNDDETECTOR_I2S_SCK,
+    .ws_io_num = SOUNDDETECTOR_I2S_WS,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num = SOUNDDETECTOR_I2S_SD
+  };
+  i2s_set_pin(SOUNDDETECTOR_I2S_PORT, &pin_config);
+  Serial.println("I2S Pins Setup");
+}
+
+int i2sWaveformRead() {
+    static int16_t sBuffer[8]; // Buffer for I2S data
+    size_t bytesIn = 0;
+    float mean = 0;
+    // Perform I2S read
+    esp_err_t result = i2s_read(SOUNDDETECTOR_I2S_PORT, &sBuffer, sizeof(sBuffer), &bytesIn, portMAX_DELAY);
+    if (result != ESP_OK) {
+        Serial.println("I2S read failed");
+        return 0; // Return 0 if read fails
+    }
+    // Calculate mean value of the samples
+    int samples_read = bytesIn / sizeof(int16_t); // Calculate number of samples read
+    if (samples_read > 0) {
+        for (int i = 0; i < samples_read; ++i) {
+         if (sBuffer[i] < 0) { mean += (sBuffer[i]*-1); } else { mean += sBuffer[i]; }
+        }
+        mean /= samples_read; // Compute average
+    }
+    // Map the mean value from its range to 30-1023
+    // Assuming the mean ranges from -4096 to 4096 (16-bit signed)
+    if (mean < 30) mean = 0;
+    int scaledValue = map(mean, 30, 4096, 0, 1023);
+    scaledValue = constrain(mean, 0, 1023); // Ensure the value is within 0-4095
+   //   Serial.println(scaledValue);
+    return scaledValue;
+}
+
+void readAndProcessAudio() {
+    static double vReal[SOUNDDETECTOR_SAMPLES];
+    static double vImag[SOUNDDETECTOR_SAMPLES];
+    int16_t buffer[SOUNDDETECTOR_SAMPLES];
+    size_t bytesIn = 0;
+    static double AGC_amp = 1.0; // Initialize AGC amplitude
+    const double agcSpeed = 0.1;  // AGC adaptation speed (adjust as needed)
+    const double noiseFloor = 500.0; // Set this value to your noise floor threshold
+
+    // Reset SOUNDDETECTOR_bandValues for each loop iteration
+    memset(SOUNDDETECTOR_bandValues, 0, sizeof(SOUNDDETECTOR_bandValues));
+
+    // Read audio data (non-blocking)
+    i2s_read(SOUNDDETECTOR_I2S_PORT, &buffer, sizeof(buffer), &bytesIn, 0);
+    if (bytesIn < sizeof(buffer)) {
+        // Not enough data read, fill the rest with zeros
+        memset(&buffer[bytesIn / sizeof(int16_t)], 0, sizeof(buffer) - bytesIn);
+    }
+
+    // Convert samples to double
+    for (int i = 0; i < SOUNDDETECTOR_SAMPLES; i++) {
+        vReal[i] = (double)buffer[i];
+        vImag[i] = 0.0;
+    }
+
+    // Perform FFT
+    FFT.Windowing(vReal, SOUNDDETECTOR_SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+    FFT.Compute(vReal, vImag, SOUNDDETECTOR_SAMPLES, FFT_FORWARD);
+    FFT.ComplexToMagnitude(vReal, vImag, SOUNDDETECTOR_SAMPLES);
+
+    // Apply dynamic range compression and map FFT bins to frequency bands
+    double maxCompressedMagnitude = 0.0;
+
+    for (int i = 1; i < (SOUNDDETECTOR_SAMPLES / 2); i++) {
+        int bandIndex = -1;
+
+        if (i >= 1 && i <= 2) bandIndex = 0;          // 62.5 Hz - 125 Hz
+        else if (i >= 3 && i <= 4) bandIndex = 1;     // 187.5 Hz - 250 Hz
+        else if (i >= 5 && i <= 6) bandIndex = 2;     // 312.5 Hz - 375 Hz
+        else if (i >= 7 && i <= 8) bandIndex = 3;     // 437.5 Hz - 500 Hz
+        else if (i >= 9 && i <= 16) bandIndex = 4;    // 562.5 Hz - 1,000 Hz
+        else if (i >= 17 && i <= 52) bandIndex = 5;   // 1,062.5 Hz - 2,000 Hz
+        else if (i >= 53 && i <= 56) bandIndex = 6;   // 2,062.5 Hz - 3,000 Hz
+        else if (i >= 57 && i <= 100) bandIndex = 7;   // 3,062.5 Hz - 4,000 Hz
+
+        if (bandIndex != -1) {
+            // Apply noise floor threshold
+            if (vReal[i] < noiseFloor) {
+                vReal[i] = 0.0; // Ignore values below the noise floor
+            } else {
+                // Apply dynamic range compression using logarithmic scaling
+                double magnitude = vReal[i];
+                double compressedMagnitude = log10(magnitude - noiseFloor + 1.0); // +1 to avoid log(0)
+
+                // Sum the compressed magnitudes into the band
+                SOUNDDETECTOR_bandValues[bandIndex] += compressedMagnitude;
+
+                // Update maxCompressedMagnitude
+                if (compressedMagnitude > maxCompressedMagnitude) {
+                    maxCompressedMagnitude = compressedMagnitude;
+                }
+            }
+        }
+    }
+
+    // Update AGC amplitude towards the current maximum compressed magnitude
+    AGC_amp = (1.0 - agcSpeed) * AGC_amp + agcSpeed * maxCompressedMagnitude;
+
+    // Map compressed magnitudes to bar heights
+    for (int band = 0; band < SOUNDDETECTOR_BANDS_WIDTH; band++) {
+        double magnitude = SOUNDDETECTOR_bandValues[band];
+
+        // Scale using AGC amplitude
+        double scaledMagnitude = magnitude / (AGC_amp + 1e-6); // Avoid division by zero
+
+        // Map to bar height
+        int barHeight = (int)(scaledMagnitude * SOUNDDETECTOR_BANDS_HEIGHT);
+
+        // Constrain barHeight
+        barHeight = constrain(barHeight, 0, SOUNDDETECTOR_BANDS_HEIGHT);
+
+        // Store barHeight in SOUNDDETECTOR_bandValues[band]
+        SOUNDDETECTOR_bandValues[band] = barHeight;
+    }
+}
+
+void SpectrumAnalyzer() {    //mostly from github.com/justcallmekoko/Arduino-FastLED-Music-Visualizer/blob/master/music_visualizer.ino
+  currentMode = 0;
+  if (spectrumMode < 12) {
+	  const TProgmemRGBPalette16 FireColors = {0xFFFFCC, 0xFFFF99, 0xFFFF66, 0xFFFF33, 0xFFFF00, 0xFFCC00, 0xFF9900, 0xFF6600, 0xFF3300, 0xFF3300, 0xFF0000, 0xCC0000, 0x990000, 0x660000, 0x330000, 0x110000};
+	  const TProgmemRGBPalette16 FireColors2 = {0xFFFF99, 0xFFFF66, 0xFFFF33, 0xFFFF00, 0xFFCC00, 0xFF9900, 0xFF6600, 0xFF3300, 0xFF3300, 0xFF0000, 0xCC0000, 0x990000, 0x660000, 0x330000, 0x110000};
+	  const TProgmemRGBPalette16 FireColors3 = {0xFFFF66, 0xFFFF33, 0xFFFF00, 0xFFCC00, 0xFF9900, 0xFF6600, 0xFF3300, 0xFF3300, 0xFF0000, 0xCC0000, 0x990000, 0x660000, 0x330000, 0x110000};
+	  int audio_input = i2sWaveformRead();
+	  if (audio_input > 0) {
+   //   Serial.println("spectrum running");
+		SOUNDDETECTOR_pre_react = (SPECTRUM_PIXELS * audio_input) / 1023L; // TRANSLATE AUDIO LEVEL TO NUMBER OF LEDs
+		if (SOUNDDETECTOR_pre_react > SOUNDDETECTOR_react) // ONLY ADJUST LEVEL OF LED IF LEVEL HIGHER THAN CURRENT LEVEL
+		  SOUNDDETECTOR_react = SOUNDDETECTOR_pre_react;
+	   }
+	  for(int i = SPECTRUM_PIXELS - 1; i >= 0; i--) {
+      int fake =  i * LEDS_PER_SEGMENT;
+      int fireChoice = random(4);
+      if (i < SOUNDDETECTOR_react)
+      for (byte s=0; s<LEDS_PER_SEGMENT; s++ ){              // 7 LEDs per segment
+        if (spectrumColorSettings == 0) { spectrumColor = CRGB(spectrumColorValue); }
+        if (spectrumColorSettings == 1) { spectrumColor = CHSV((255/SPECTRUM_PIXELS)*i, 255, 255);}
+        if (spectrumColorSettings == 2) { spectrumColor = colorWheel((i * 256 / 50 + colorWheelPosition) % 256);}
+        if (spectrumColorSettings == 3 && fireChoice >= 2) { spectrumColor = ColorFromPalette( FireColors, (255/SPECTRUM_PIXELS)*i, 255, LINEARBLEND);}
+        if (spectrumColorSettings == 3 && fireChoice == 0) { spectrumColor = ColorFromPalette( FireColors2, (255/SPECTRUM_PIXELS)*i, 255, LINEARBLEND);}
+        if (spectrumColorSettings == 3 && fireChoice == 1) { spectrumColor = ColorFromPalette( FireColors3, (255/SPECTRUM_PIXELS)*i, 255, LINEARBLEND);}
+        if (spectrumColorSettings == 4) { spectrumColor = ColorFromPalette( OceanColors_p, (255/SPECTRUM_PIXELS)*i, 255, LINEARBLEND);}
+        if (spectrumColorSettings == 5) { spectrumColor = ColorFromPalette( ForestColors_p, (255/SPECTRUM_PIXELS)*i, 255, LINEARBLEND);}
+        if (spectrumColorSettings == 6) { spectrumColor = colorWheel2(((255) + colorWheelPositionTwo) % 256);}
+        if (spectrumMode == 0) {LEDs[FAKE_LEDs_C_BMUP[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 1) {LEDs[FAKE_LEDs_C_CMOT[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 2) {LEDs[FAKE_LEDs_C_BLTR[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 3) {LEDs[FAKE_LEDs_C_TLBR[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 4) {LEDs[FAKE_LEDs_C_VERT[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 5) {LEDs[FAKE_LEDs_C_TMDN[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 6) {LEDs[FAKE_LEDs_C_CSIN[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 7) {LEDs[FAKE_LEDs_C_BRTL[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 8) {LEDs[FAKE_LEDs_C_TRBL[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 9) {LEDs[FAKE_LEDs_C_OUTS[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 10) {LEDs[FAKE_LEDs_C_VERT2[s+((fake))]] = spectrumColor;}
+        if (spectrumMode == 11) {LEDs[FAKE_LEDs_C_OUTS2[s+((fake))]] = spectrumColor;}
+      }
+      else
+      for (byte s=0; s<LEDS_PER_SEGMENT; s++ ){              // 7 LEDs per segment
+        if (spectrumBackgroundSettings == 0) { spectrumBackgroundColor = CRGB(spectrumBackgroundColorValue); }
+        if (spectrumBackgroundSettings == 1) { spectrumBackgroundColor = colorWheel((i * 256 / 50 + colorWheelPosition) % 256);}
+        if (spectrumBackgroundSettings == 2) { spectrumBackgroundColor = colorWheel2(((255) + colorWheelPositionTwo) % 256);}
+        if (spectrumMode == 0) {LEDs[FAKE_LEDs_C_BMUP[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 1) {LEDs[FAKE_LEDs_C_CMOT[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 2) {LEDs[FAKE_LEDs_C_BLTR[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 3) {LEDs[FAKE_LEDs_C_TLBR[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 4) {LEDs[FAKE_LEDs_C_VERT[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 5) {LEDs[FAKE_LEDs_C_TMDN[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 6) {LEDs[FAKE_LEDs_C_CSIN[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 7) {LEDs[FAKE_LEDs_C_BRTL[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 8) {LEDs[FAKE_LEDs_C_TRBL[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 9) {LEDs[FAKE_LEDs_C_OUTS[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 10) {LEDs[FAKE_LEDs_C_VERT2[s+((fake))]] = spectrumBackgroundColor;}
+        if (spectrumMode == 11) {LEDs[FAKE_LEDs_C_OUTS2[s+((fake))]] = spectrumBackgroundColor;}
+      }    
+	  }
+	  FastLED.show();                              // Increment the Hue to get the Rainbow
+	  colorWheelPosition = colorWheelPosition - colorWheelSpeed; // SPEED OF COLOR WHEEL
+	  if (colorWheelPosition < 0) // RESET COLOR WHEEL
+		colorWheelPosition = 255;
+	  SOUNDDETECTOR_decay_check++;
+	  if (SOUNDDETECTOR_decay_check > SOUNDDETECTOR_decay) {
+      SOUNDDETECTOR_decay_check = 0;
+      if (SOUNDDETECTOR_react > 0)
+        SOUNDDETECTOR_react--;
+	  }
+	}// end spectrumMode < 12
+  else {
+
+    if (spectrumMode == 15) {
+      spectrumColor = CRGB(spectrumColorValue);  //spectrum selected color
+      if (spectrumColorSettings == 2) { spectrumColor = colorWheel((colorWheelPositionTwo * 256 / 50 + colorWheelPosition) % 256);}  //cycle fast
+      if (spectrumColorSettings == 6) { spectrumColor = colorWheel2((colorWheelPositionTwo));}  //cycle slow
+      colorWheelPosition = colorWheelPosition - colorWheelSpeed; // SPEED OF COLOR WHEEL
+      if (colorWheelPosition < 0){ colorWheelPosition = 255; } // RESET COLOR WHEEL
+    }
+
+    // Reset SOUNDDETECTOR_bandValues[]
+    for (int i = 0; i<SOUNDDETECTOR_BANDS_WIDTH; i++){
+      SOUNDDETECTOR_bandValues[i] = 0;
+    }
+
+    readAndProcessAudio();
+
+    // Process the FFT data into bar heights
+    for (byte band = 0; band < SOUNDDETECTOR_BANDS_WIDTH; band++) {
+
+      // Scale the bars for the display
+      int barHeight = SOUNDDETECTOR_bandValues[band] ;     if (barHeight > SOUNDDETECTOR_BANDS_HEIGHT) {
+        SOUNDDETECTOR_Amplitude += ((barHeight - SOUNDDETECTOR_BANDS_HEIGHT) /8);
+        barHeight = SOUNDDETECTOR_BANDS_HEIGHT;
+      }
+
+      // Small amount of averaging between frames
+      barHeight = ((oldBarHeights[band] * 1) + barHeight) / 2;
+
+      // Move peak up
+      if (barHeight > peak[band]) {
+        peak[band] = min(SOUNDDETECTOR_BANDS_HEIGHT, barHeight);
+      }
+
+      if (spectrumMode < 12 + 7)
+		    buttonPushCounter = spectrumMode - 12;
+
+      // Draw bars
+      switch (buttonPushCounter) {
+        case 0:
+          rainbowBars(band, barHeight);
+          break;
+        case 1:
+          // No bars on this one
+          break;
+        case 2:
+          purpleBars(band, barHeight);
+          break;
+        case 3:
+          centerBars(band, barHeight);
+          break;
+        case 4:
+          changingBars(band, barHeight);
+          break;
+        case 5:
+          fireBars(band, barHeight);
+          break;
+        case 6:
+          waterfall(band);
+          break;
+      }
+
+      // Draw peaks
+      switch (buttonPushCounter) {
+        case 0:
+          whitePeak(band);
+          break;
+        case 1:
+          outrunPeak(band);
+          break;
+        case 2:
+          whitePeak(band);
+          break;
+        case 3:
+          // No peaks
+          break;
+        case 4:
+          // No peaks
+          break;
+        case 5:
+          // No peaks
+          break;
+        case 6:
+          // No peaks
+          break;
+      }
+
+      // Save oldBarHeights for averaging later
+      oldBarHeights[band] = barHeight;
+    }
+
+	// Decay peak
+	EVERY_N_MILLISECONDS(60) {
+		for (byte band = 0; band < SOUNDDETECTOR_BANDS_WIDTH; band++) {
+			if (peak[band] > 0) {
+				peak[band] -= 1;
+			} else {
+				peak[band] = 0; // Ensure it doesn't go negative
+			}
+		}
+	}
+/*
+	Serial.print("Peak values: ");
+	for (byte band = 0; band < SOUNDDETECTOR_BANDS_WIDTH; band++) {
+		Serial.print(peak[band]);
+		Serial.print(" ");
+	}
+	Serial.println();
+*/
+    // Used in some of the patterns
+    EVERY_N_MILLISECONDS(10) {
+      colorTimer++;
+    }
+
+    EVERY_N_SECONDS(1) {
+      if (SOUNDDETECTOR_Amplitude > 500) {
+        SOUNDDETECTOR_Amplitude -= (SOUNDDETECTOR_Amplitude /150);
+      }
+    }
+
+    EVERY_N_SECONDS(10) {
+		// Auto Switch mode
+      if (spectrumMode >= 12 + 7) buttonPushCounter = (buttonPushCounter + 1) % 7;
+      allBlank();
+    }
+
+    FastLED.show();
+  } // end else spectrumMode > 12
+}
+#endif
 
 void endCountdown() {  //countdown timer has reached 0, sound alarm and flash End for 30 seconds
   //  Serial.println("endcountdown function");
@@ -1302,6 +2335,45 @@ void endCountdown() {  //countdown timer has reached 0, sound alarm and flash En
   FastLED.setBrightness(255);
   CRGB color = CRGB::Red; 
   allBlank();
+  #if HAS_BUZZER
+  if (useAudibleAlarm == 1) { //alarm, ok
+    if(!getLocalTime(&timeinfo)){ Serial.println("Failed to obtain time"); }
+    int mday = timeinfo.tm_mday;
+    int mont = timeinfo.tm_mon + 1;
+    String songName = listOfSong[specialAudibleAlarm];  // Get the song name as a String
+    Serial.print("songName ");
+    Serial.println(songName);
+    songName.toCharArray(songTaskbuffer, songTaskbufferSize);
+    xQueueSend(jobQueue, songTaskbuffer, (TickType_t)0);
+    color = colorWheel((205 / 50 + colorWheelPosition) % 256);
+    displayNumber(38,5,color);  //E 38
+    displayNumber(79,3,color);  //n 79
+    displayNumber(69,1,color);  //d 69
+    FastLED.show();
+    colorWheelPosition++;
+    server.handleClient();   
+    } else {  //no alarm, ok, flash lights
+    for (int i=0; i<1000 && !breakOutSet; i++) {
+      color = colorWheel((205 / 50 + colorWheelPosition) % 256);
+      displayNumber(38,5,color);  //E 38
+      displayNumber(79,3,color);  //n 79
+      displayNumber(69,1,color);  //d 69
+      FastLED.show();
+      colorWheelPosition++;
+      server.handleClient();   
+    }
+      }
+  #else
+    for (int i=0; i<1000 && !breakOutSet; i++) {
+      color = colorWheel((205 / 50 + colorWheelPosition) % 256);
+      displayNumber(38,5,color);  //E 38
+      displayNumber(79,3,color);  //n 79
+      displayNumber(69,1,color);  //d 69
+      FastLED.show();
+      colorWheelPosition++;
+      server.handleClient();   
+    }
+  #endif
   clockMode = currentMode; 
   realtimeMode = currentReal;
   if (!breakOutSet) {scroll("tIMEr Ended      tIMEr Ended");}
@@ -1345,7 +2417,7 @@ CRGB colorWheel2(int pos) {   //color wheel for things not the spectrum analyzer
 }
 
 void scroll(String IncomingString) {    //main scrolling function
-  Serial.println(IncomingString);
+  Serial.println("Scroll Text: " + IncomingString);
   breakOutSet = 0;
   scrollColor = CRGB(scrollColorValue);
   if (IncomingString.length() > 512 ) { IncomingString = "ArE U A HAckEr"; }   //too big?
@@ -1457,10 +2529,6 @@ void scroll(String IncomingString) {    //main scrolling function
     if ( finalposition < ((IncomingString.length()*2)+6)) {
       for (int i=0; i<250 && !breakOutSet; i++) {
         server.handleClient();   
-        server.handleClient();
-        haMqtt.loop();      // MQTT am Leben erhalten
-        mqttClient.loop();  // MQTT am Leben erhalten
-        delay(1);           // Kurze Pause für Systemstabilität
       }    //slow down on non-padded parts with web server polls
     } 
   }
@@ -1470,6 +2538,28 @@ void scroll(String IncomingString) {    //main scrolling function
 
 
 void printLocalTime() {  //what could this do
+  #if HAS_RTC
+    DateTime now = rtc.now();
+    char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    char monthsOfTheYear[12][12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+    if (!rtc.lostPower()) {
+      Serial.print("DS3231 Time: ");
+      Serial.print(daysOfTheWeek[now.dayOfTheWeek()]);
+      Serial.print(", ");
+      Serial.print(monthsOfTheYear[now.month()-1]);
+      Serial.print(" ");
+      Serial.print(now.day(), DEC);
+      Serial.print(" ");
+      Serial.print(now.year(), DEC);
+      Serial.print(' ');
+      Serial.print(now.hour(), DEC);
+      Serial.print(':');
+      Serial.print(now.minute(), DEC);
+      Serial.print(':');
+      Serial.print(now.second(), DEC);
+      Serial.println();
+    }
+  #endif
   if(!getLocalTime(&timeinfo)){
     Serial.println("Failed to obtain time");
     return;
@@ -1479,14 +2569,448 @@ void printLocalTime() {  //what could this do
 
 
 void checkSleepTimer(){  //controls suspend mode
+  #if HAS_BUZZER
+  if(!rtttl::isPlaying()) {  // don't allow chimes to keep it awake. 
+    if (suspendType != 0) {sleepTimerCurrent++;}  //sleep enabled? add one to timer
+      #if HAS_SOUNDDETECTOR
+ /*       int audio_input1 = i2sWaveformRead(); 
+        if (audio_input1 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+        int audio_input2 = i2sWaveformRead(); 
+        if (audio_input2 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+        int audio_input3 = i2sWaveformRead(); 
+        if (audio_input3 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+        int audio_input4 = i2sWaveformRead(); 
+        if (audio_input4 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+        int audio_input5 = i2sWaveformRead();
+        if (audio_input5 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+        */
+        SOUNDDETECTOR_averageAudioInput = i2sWaveformRead();
+        if (SOUNDDETECTOR_averageAudioInput > 50) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      #endif
+    if ((suspendType != 0) && sleepTimerCurrent >= (suspendFrequency * 60)) {sleepTimerCurrent = 0; isAsleep = 1; allBlank(); }  //sleep enabled, been some amount of time, go to sleep
+	if (suspendType = 2) {shelfBlank();}//if suspend all leds in on, blank shelflights
+  }
+  #else
+    #if HAS_SOUNDDETECTOR
+      if (suspendType != 0) {sleepTimerCurrent++;}  //sleep enabled? add one to timer
+      int audio_input1 = i2sWaveformRead();
+      if (audio_input1 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      int audio_input2 = i2sWaveformRead();
+      if (audio_input2 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      int audio_input3 = i2sWaveformRead(); 
+      if (audio_input3 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      int audio_input4 = i2sWaveformRead();
+      if (audio_input4 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      int audio_input5 = i2sWaveformRead(); 
+      if (audio_input5 > 100) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      SOUNDDETECTOR_averageAudioInput = (audio_input1 + audio_input2 + audio_input3 + audio_input4 + audio_input5) / 5;
+      if (SOUNDDETECTOR_averageAudioInput > 50) {sleepTimerCurrent = 0; isAsleep = 0;} //try it with the real sensor, the digital one was tripping false positives just as much
+      if ((suspendType != 0) && sleepTimerCurrent >= (suspendFrequency * 60)) {sleepTimerCurrent = 0; isAsleep = 1; allBlank(); }  //sleep enabled, been some amount of time, go to sleep
+	  if (suspendType = 2) {shelfBlank();}  //if suspend all leds in on, blank shelflights
+	      #endif
+  #endif
 }
 
 
 
 
-void applyBrightness() {
-  FastLED.setBrightness(brightness);
+void GetBrightnessLevel() {
+  #if HAS_PHOTOSENSOR
+  getsamplePhoto(); 
+    // 1) instant average in O(1)
+    uint16_t avgReading = brightnessSum / PHOTO_SAMPLES;
+  
+    //Serial.print("avgReading: ");
+    //Serial.println(avgReading);
+    // 2) map to your 10 discrete levels
+    const int NUM_LEVELS = 10;
+    static const int sensorThresholds[NUM_LEVELS] = {
+      0,   200,  400,  700,  900,
+      1200,2000, 3185, 3640, 4095
+    };
+    static const int brightnessLevels[NUM_LEVELS] = {
+      255, 150, 100, 75, 60,
+       50,  40,  30, 20, 10
+    };
+  
+    int lvl = 0;
+    for (int i = NUM_LEVELS - 1; i >= 0; i--) {
+      if (avgReading >= sensorThresholds[i]) {
+        lvl = i;
+        break;
+      }
+    }
+    lightSensorValue = brightnessLevels[lvl];
+  
+    // 3) apply (user override if brightness != 10)
+    FastLED.setBrightness(brightness != 10 ? brightness : lightSensorValue);
+  #else
+    FastLED.setBrightness(brightness);
+  #endif
+  }
+
+
+  void updateRainForecast() {
+    #if HAS_USWEATHER
+  
+    // — find last Monday —
+    time_t now = time(NULL);
+    struct tm todayInfo;
+    localtime_r(&now, &todayInfo);
+    int daysSinceMonday = (todayInfo.tm_wday + 6) % 7; // Mon→0…Sun→6
+    time_t lastMonday = now - daysSinceMonday * 86400;
+  
+    // format start/end dates
+    char startDate[11], endDate[11];
+    {
+      struct tm mInfo;
+      localtime_r(&lastMonday, &mInfo);
+      strftime(startDate, sizeof(startDate), "%Y-%m-%d", &mInfo);
+    }
+    {
+      time_t endTime = lastMonday + 13 * 86400;  // 14 days total
+      struct tm eInfo;
+      localtime_r(&endTime, &eInfo);
+      strftime(endDate, sizeof(endDate), "%Y-%m-%d", &eInfo);
+    }
+  
+    // build the URL
+    String apiUrl = String("https://api.open-meteo.com/v1/forecast")
+                  + "?latitude="  + String(latitude, 9)
+                  + "&longitude=" + String(longitude, 9)
+                  + "&daily=precipitation_probability_max"
+                  + "&start_date=" + startDate
+                  + "&&end_date="   + endDate
+                  + "&timezone=auto";
+  
+    Serial.println("Fetching rain chance Mon→Sun+1wk:");
+    Serial.println(apiUrl);
+  
+    // clear the LEDs
+    for (int i = 0; i < 14; i++) rainForecast[i] = 0;
+  
+    // fetch JSON
+    HTTPClient http;
+    http.begin(apiUrl);
+    int code = http.GET();
+    if (code != 200) {
+      Serial.printf("HTTP GET failed: %d\n", code);
+      http.end();
+      return;
+    }
+    String payload = http.getString();
+    http.end();
+  
+    // parse into a heap‐allocated doc (no stack overflow)
+    DynamicJsonDocument doc(4*1024);
+    auto err = deserializeJson(doc, payload);
+    if (err) {
+      Serial.print("JSON parse failed: ");
+      Serial.println(err.f_str());
+      return;
+    }
+  
+    // extract probabilities
+    JsonArray probs = doc["daily"]["precipitation_probability_max"];
+    int days = min((int)probs.size(), 14);
+  
+     // map 33–100% → brightness 20–255, below 33% = off
+  for (int i = 0; i < days; i++) {
+    int pct = constrain(probs[i].as<int>(), 0, 100);
+    if (pct < 33) {// no LED if under 33%
+      rainForecast[i] = 0;               
+    } else {
+      rainForecast[i] = map(pct, 33, 100, 20, 255);
+    }
+  }
+  
+    // debug print
+    for (int i = 0; i < days; i++) {
+      Serial.printf("Day %2d: %3d%% → bri %3d\n",
+                    i, probs[i].as<int>(), rainForecast[i]);
+    }
+    
+  // --- Adjust the order of the LED array to match your wiring ---
+  // Required order: 13,12,11,10,9,8,7,0,1,2,3,4,5,6
+  uint32_t tempHolder[14];
+  static const uint8_t idxMap[14] = {
+      7,8,9,10,11,12,13,   // new[0..6]
+      6, 5, 4, 3, 2,1,0    // new[7..13]
+  };
+  for (int i = 0; i < 14; i++) {
+      tempHolder[i] = rainForecast[idxMap[i]];
+  }
+  memcpy(rainForecast, tempHolder, sizeof(tempHolder));
+
+    #endif
+  }
+  
+
+  void getNoaaWeather() {
+    #if HAS_USWEATHER
+    // 1) build the DWML XML URL
+    float latF = atof(latitude);
+    float lonF = atof(longitude);
+    String url = String("https://forecast.weather.gov/MapClick.php") + "?lat=" + String(latF, 3) + "&lon=" + String(lonF, 3) + "&unit=0&lg=english&FcstType=dwml";
+    Serial.println(url);
+    // 2) start the request
+    HTTPClient http;
+    http.begin(url);
+    http.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+      "AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/115.0.0.0 Safari/537.36"
+    );
+  //  http.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" );
+  //  http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    http.addHeader("Referer",      "https://forecast.weather.gov/");
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+      Serial.printf("HTTP GET failed: %d\n", code);
+      noaaTemp     = 0.0f;
+      noaaHumidity = 0.0f;
+      http.end();
+      return;
+    }
+    // 3) stream-parse the XML
+    WiFiClient* in = http.getStreamPtr();
+    char buf[12];
+    // — parse current “apparent” temperature —
+    const char* tMarker = "<temperature type=\"apparent\"";
+    if ( in->find(tMarker) && in->find("<value>") ) {
+      size_t i = 0;
+      while (in->available() && i < sizeof(buf)-1) {
+        char c = in->read();
+        if (c == '<') break;
+        buf[i++] = c;
+      }
+      buf[i] = '\0';
+      noaaTemp = atof(buf);
+    } else {
+      Serial.println("temp element not found");
+      noaaTemp = 0.0f;
+    }
+    // — parse current “relative” humidity —
+    const char* hMarker = "<humidity type=\"relative\"";
+    if ( in->find(hMarker) && in->find("<value>") ) {
+      size_t i = 0;
+      while (in->available() && i < sizeof(buf)-1) {
+        char c = in->read();
+        if (c == '<') break;
+        buf[i++] = c;
+      }
+      buf[i] = '\0';
+      noaaHumidity = atof(buf);
+    } else {
+      Serial.println("humidity element not found");
+      noaaHumidity = 0.0f;
+    }
+    // 4) report and clean up
+    Serial.printf("NOAA → Temp: %.1f°F, Humidity: %.1f%%\n", noaaTemp, noaaHumidity);
+    http.end();
+    #endif
+  }
+  
+
+
+
+
+  void fetchTides() {
+    #if HAS_USWEATHER
+    HTTPClient http;
+    bool hourlyOk   = false;
+    bool highLowOk  = false;
+  
+    // 1) build base URL
+    String baseURL = String("https://api.tidesandcurrents.noaa.gov/api/prod/datagetter")
+      + "?station="  + stationID
+      + "&product=predictions"
+      + "&datum=MLLW"
+      + "&time_zone=lst_ldt"
+      + "&units=english"
+      + "&application=DataAPI_Sample"
+      + "&format=json";
+  
+    // 2) compute today’s YYYYMMDD
+    time_t now = time(nullptr);
+    struct tm tmInfo;
+    localtime_r(&now, &tmInfo);
+    char todayStr[9];
+    strftime(todayStr, sizeof(todayStr), "%Y%m%d", &tmInfo);
+  
+    // 3) fetch next 48h
+    String url48 = baseURL + "&begin_date=" + todayStr + "&range=48&interval=h";
+    Serial.println("Polling next 48 hours of tide predictions…");
+    Serial.println(url48);
+  
+    http.begin(url48);
+    http.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+      "AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/115.0.0.0 Safari/537.36"
+    );
+    http.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" );
+    http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    http.addHeader("Referer",      "https://tidesandcurrents.noaa.gov/");
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      // allocate on heap
+      DynamicJsonDocument doc(8192);
+      DeserializationError err = deserializeJson(doc, http.getStream());
+      if (!err) {
+        JsonArray preds = doc["predictions"].as<JsonArray>();
+        for (size_t i = 0; i < preds.size() && i < 48; i++) {
+          tideHeight[i] = preds[i]["v"].as<float>();
+        }
+        hourlyOk = true;
+      } else {
+        Serial.print("JSON parse error: "); Serial.println(err.c_str());
+      }
+    } else {
+      Serial.printf("HTTP GET failed: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+  
+    // 4) fetch today's high/low
+    String hiloURL = baseURL + "&date=today&interval=hilo";
+    Serial.println("Polling today's high/low tide data…");
+    Serial.println(hiloURL);
+  
+    http.begin(hiloURL);
+    http.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+      "AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/115.0.0.0 Safari/537.36"
+    );
+    http.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" );
+    http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    http.addHeader("Referer",      "https://tidesandcurrents.noaa.gov/");
+    httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      DynamicJsonDocument doc2(2048);
+      DeserializationError err2 = deserializeJson(doc2, http.getStream());
+      if (!err2) {
+        JsonArray hlo = doc2["predictions"].as<JsonArray>();
+        String text = "";
+        for (JsonObject p : hlo) {
+          const char* type = p["type"];
+          const char* tFull = p["t"];
+          char tstr[6];
+          // grab "HH:MM"
+          memcpy(tstr, tFull + 11, 5);
+          tstr[5] = '\0';
+          float v = p["v"].as<float>();
+          char buf[32];
+          snprintf(buf, sizeof(buf), "%s %s %.1f ft     ", type, tstr, v);
+          text += buf;
+        }
+        text.toCharArray(textTides, sizeof(textTides));
+        highLowOk = true;
+      } else {
+        Serial.print("JSON parse error: "); Serial.println(err2.c_str());
+      }
+    } else {
+      Serial.printf("HTTP GET failed: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+  
+    // 5) combine results
+    dailyPollSuccess = (hourlyOk && highLowOk);
+    if (dailyPollSuccess) {
+      dailyPollFailed = 0;
+      Serial.println("Daily poll succeeded. 48h data:");
+      for (int i = 0; i < 48; i++) {
+        Serial.printf("Hour %02d: %.2f ft\n", i, tideHeight[i]);
+      }
+    } else {
+      Serial.println("Daily poll failed.");
+      for (int i = 0; i < 14; i++) tideColor[i] = 0;
+      dailyPollFailed++;
+    }
+    #endif
+  }
+
+void processCurrentTide() {
+  #if HAS_USWEATHER
+  // If the daily poll previously failed, try to poll again (up to a limited number of retries).
+  if (!dailyPollSuccess && dailyPollFailed < 3) {
+    Serial.println("Daily poll failed last time. Retrying poll...");
+    fetchTides();
+  }
+  
+  // Get the current hour from the RTC.
+  time_t now = time(NULL);
+  struct tm *timeinfo = localtime(&now);
+  int startIndex = timeinfo->tm_hour;
+  // if we’re not exactly on the hour, show the *next* hour block
+  if (timeinfo->tm_min > 0 || timeinfo->tm_sec > 0) {
+    startIndex++;
+  }
+  // clamp so we don’t overrun the 48-hour buffer
+  if (startIndex > 48 - 14) {
+    startIndex = 48 - 14;
+  }
+
+  // find local min/max and their indices as before
+  float localMin = tideHeight[startIndex], localMax = tideHeight[startIndex];
+  int localMinIndex = startIndex, localMaxIndex = startIndex;
+  for (int i = startIndex; i < startIndex + 14; i++) {
+    if (tideHeight[i] < localMin) { localMin = tideHeight[i]; localMinIndex = i; }
+    if (tideHeight[i] > localMax) { localMax = tideHeight[i]; localMaxIndex = i; }
+  }
+  bool rising = (localMinIndex < localMaxIndex);
+
+  for (int i = 0; i < 14; i++) {
+    int idx = startIndex + i;
+    float range = (localMax != localMin) ? (localMax - localMin) : 1;
+    float norm  = (tideHeight[idx] - localMin) / range;
+
+    // simple gradient: 0=blue, 1=red
+    uint8_t red  = norm * 255;
+    uint8_t blue = (1.0 - norm) * 255;
+
+    // brightness floor (min→52, max→255)
+    uint8_t rawB = ((idx == localMinIndex) || (idx == localMaxIndex)) ? 255 : 20;
+    uint8_t bright = map(rawB, 0, 255, 52, 255);
+
+    // apply brightness
+    red  = (red  * bright) / 255;
+    blue = (blue * bright) / 255;
+
+    tideColor[i] = (red << 16) | blue;
+  }
+
+ 
+
+  // --- Adjust the order of the LED array to match your wiring ---
+  uint32_t tempHolder[14];
+  #if TEST_CLOCK
+    static const uint8_t idxMap[14] = {
+      0, 1, 2, 3, 4, 5, 6,   // new[0..6]
+      7, 8, 9, 10, 11, 12, 13    // new[7..13]
+    };
+  #else
+    static const uint8_t idxMap[14] = {
+      7,8,9,10,11,12,13,   // new[0..6] for real clock if you start at bottom right and go left and up then right clockwise around the clock
+      6, 5, 4, 3, 2,1,0    // new[7..13] modifiy to fit however you've wired the shelflights
+    };
+  #endif
+  for (int i = 0; i < 14; i++) {
+      tempHolder[i] = tideColor[idxMap[i]];
+  }
+  memcpy(tideColor, tempHolder, sizeof(tempHolder));
+  
+
+  // Debug: Print the 14-hour LED mapping.
+  Serial.println("\n14-Hour LED Display Mapping:");
+  for (int i = 0; i < 14; i++) {
+    int hourIdx = startIndex + i;
+    Serial.printf("LED %02d (Hour %02d): Tide: %.2f ft -> Color: #%06X\n",
+                  i, hourIdx, tideHeight[hourIdx], tideColor[i]);
+  }
+#endif
 }
+
 
 void displayNumber(uint16_t number, byte segment, CRGB color) {   //main digit rendering (except when scrolling)
   // segments from left to right: 6, 5, 4, 3, 2, 1, 0
@@ -1517,6 +3041,8 @@ void displayNumber(uint16_t number, byte segment, CRGB color) {   //main digit r
   }
 
   for (byte i=0; i<SEGMENTS_PER_NUMBER; i++){                // 7 segments
+    if (fakeclockrunning == 0 && (((ClockColorSettings == 4 && clockMode == 0) || (DateColorSettings == 4 && clockMode == 7) || (tempColorSettings == 4 && clockMode == 2) || (humiColorSettings == 4 && clockMode == 8)) && pastelColors == 0))  { color = CHSV(random(0, 255), 255, 255);}
+    if (fakeclockrunning == 0 && (((ClockColorSettings == 4 && clockMode == 0) || (DateColorSettings == 4 && clockMode == 7) || (tempColorSettings == 4 && clockMode == 2) || (humiColorSettings == 4 && clockMode == 8)) && pastelColors == 1)) { color = CRGB(random(0, 255), random(0, 255), random(0, 255));}
     for (byte j=0; j<LEDS_PER_SEGMENT; j++ ){              // 7 LEDs per segment
       yield();
       LEDs[FAKE_LEDs[i * LEDS_PER_SEGMENT + j + startindex]] = ((numbers[number] & 1 << i) == 1 << i) ? color : alternateColor;
@@ -1563,8 +3089,15 @@ void allBlank() {   //clears all non-shelf LEDs to black
     LEDs[i] = CRGB::Black;
   }
   FastLED.show();
-  applyBrightness();
+  GetBrightnessLevel();
 }  // end of all-blank
+
+void shelfBlank() {   //clears all shelf LEDs to black
+  for (int i=SEGMENTS_LEDS; i<NUM_LEDS; i++) {
+    LEDs[i] = CRGB::Black;
+  }
+  FastLED.show();
+}  // end of shelf-blank
 
 
 void fakeClock(int loopy) {  //flashes 12:00 like all old clocks did
@@ -1621,6 +3154,10 @@ int currentHour  = timeinfo.tm_hour;
               LEDs[j].fadeToBlackBy(1);
               }
          }
+        #if HAS_USWEATHER
+          if (spotlightsColorSettings == 5 ){ LEDs[i] = CRGB(0, 0, rainForecast[i-SEGMENTS_LEDS]); }// Use rainForecast for the current and next week
+          if (spotlightsColorSettings == 6 ){ LEDs[i] = tideColor[(i-SEGMENTS_LEDS)]; } // Use tideColor for the current hour and next 13 hours
+          #endif
     }
     colorWheelPositionTwo = colorWheelPositionTwo - 1; // SPEED OF 2nd COLOR WHEEL
     if (colorWheelPositionTwo < 0) {colorWheelPositionTwo = 255;} // RESET 2nd COLOR WHEEL 
@@ -1696,6 +3233,9 @@ void BlinkDots() {  //displays the dots in the middle of the time (colon, period
 	    for (int i=20*LEDS_PER_SEGMENT; i<21*LEDS_PER_SEGMENT; i++) { LEDs[i] = CRGB::Black;}
     }
 
+    #if HAS_PHOTOSENSOR
+    getsamplePhoto();
+  #endif
 
 
   }
@@ -1709,6 +3249,7 @@ void BlinkDots() {  //displays the dots in the middle of the time (colon, period
   int year = (timeinfo.tm_year +1900)-2000;
   byte y1 = year / 10;
   byte y2 = year % 10;
+//  #if HAS_BUZZER
  // rtttl::begin(BUZZER_PIN, sounds.getSongByName("auldlang"));
 //  while( !rtttl::done() && !breakOutSet )
  // {
@@ -1761,12 +3302,6 @@ void Chase() {   //lightshow chase mode
     FastLED.show();
   for( int d = 0; d < 40; d++) {server.handleClient(); }  //delay to speed, but so the web buttons still work
   // delay(1);
-  for( int d = 0; d < 40; d++) {
-      server.handleClient(); 
-      haMqtt.loop();      // MQTT am Leben erhalten
-      mqttClient.loop();  // MQTT am Leben erhalten
-      delay(1);
-  }  //delay to speed, but so the web buttons still work
   }  
   for (int i = SPECTRUM_PIXELS-1; i > -1; --i) {   //draw backwards
     for (byte s=0; s<LEDS_PER_SEGMENT; s++ ){              // 7 LEDs per segment
@@ -1787,12 +3322,6 @@ void Chase() {   //lightshow chase mode
     FastLED.show();
   for( int d = 0; d < 40; d++) {server.handleClient(); }  //delay to speed, but so the web buttons still work
   //  delay(1);
-  for( int d = 0; d < 40; d++) {
-      server.handleClient(); 
-      haMqtt.loop();      // MQTT am Leben erhalten
-      mqttClient.loop();  // MQTT am Leben erhalten
-      delay(1);
-  }  //delay to speed, but so the web buttons still work
   }  
   if (clockMode != 5) { allBlank(); }
 } //end of chase
@@ -1800,6 +3329,14 @@ void Chase() {   //lightshow chase mode
 
  
 void Twinkles() {
+#if HAS_SOUNDDETECTOR
+  int audio_input = i2sWaveformRead();
+  int Level = map(audio_input, 0, 1023, 50, 210);
+  if (audio_input < 100){  Level = 50;  }
+  if (audio_input > 1023){  Level = 210;  }
+#else
+  int Level = 100;  //set to default if no audio board
+#endif
   int seed = random(Level);         // A random number. Higher number => fewer twinkles. Use random16() for values >255.
   int i = random(SPECTRUM_PIXELS);         // A random number. Higher number => fewer twinkles. Use random16() for values >255.
   if (seed > 46) {
@@ -1897,6 +3434,14 @@ void updateMatrix() {
 
 
 void blueRain() {
+#if HAS_SOUNDDETECTOR
+    int audio_input = i2sWaveformRead(); 
+  int Level = map(audio_input, 0, 1023, 0, 400);
+  if (audio_input < 100){  Level = 0;  }
+  if (audio_input > 1023){  Level = 400;  }
+#else
+  int Level = 400;  //set to default if no sound board
+#endif
   //  Serial.println(Level);
     int delayRain = 400-Level;
   EVERY_N_MILLIS_I( thistimer, 400 ) { // initial period = 100ms
@@ -2057,6 +3602,14 @@ void Snake() {  //real random snake mode with random food changing its color
   if (snakePosition == 36 && snakeLastDirection == 2 && move == 0)  {if (pickOne == 1) {snakeLastDirection = 1; snakePosition = 32; move = 1;} else {snakePosition = 31; move = 1;}}
   if (snakePosition == foodSpot) { oldsnakecolor = spotcolor;  snakeWaiting = 1; foodSpot = 40;}  //did snake find the food, change snake color
   if (snakeWaiting > 0) {snakeWaiting = snakeWaiting + 1;} //counting while waiting
+#if HAS_SOUNDDETECTOR
+  int audio_input = i2sWaveformRead(); 
+  int Level = map(audio_input, 0, 1023, 1, 10);
+  if (audio_input < 100){  Level = 1;  }
+  if (audio_input > 1023){  Level = 10;  }
+#else
+  int Level = 10;
+#endif
 
   if (snakeWaiting > random((30/Level),(600/Level))) {snakeWaiting = 0; foodSpot = random(SPECTRUM_PIXELS-1); spotcolor = CHSV(random(0, 255), 255, 255); if (getSlower > 3){  getSlower =  getSlower / 3;  }}  //waiting time is up, pick new spot, new color, reset speed
   if (getSlower > 1000){  getSlower = 1000;  }
@@ -2096,6 +3649,173 @@ void Cylon() {
 } //Cylon
 
 
+#if HAS_BUZZER
+void getListOfSongs() {
+  totalSongs = 0;
+  bool fileBad = 0;
+  listOfSong.clear();
+  File dir = FileFS.open("/songs");    //open root of sound directory
+  String allowedChars = "0123456789 _.-=#,:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqwerstuvwxyz\n\r";
+  while (true) {
+    File entry =  dir.openNextFile();
+    if (! entry) { break; }
+    if (!entry.isDirectory()) {   //make sure its a file and not a directory
+      char processedText[255];
+      strcpy(processedText, "/songs/");
+      strcat(processedText, entry.name());  //build full pathname
+      entry.close();
+     File file = FileFS.open(processedText, "r");  //open each song
+      if(!file){Serial.println("No Saved Data!"); return;}
+      String output;
+      while (file.available()) {     //read song file contents
+        char intRead = file.read();
+        if (allowedChars.indexOf(intRead) != -1){ output += intRead; } else { Serial.print(processedText); Serial.print(" contains non-RTTTL characters! "); Serial.println(intRead); fileBad = 1; break;}
+      }
+      file.close();
+      if (!fileBad) {
+            char *token;
+            char SongName[512];
+            const char *delimiter =":";
+            if (output.length() > 511) {Serial.print(processedText); Serial.println(" file is too big!"); deleteFile(FileFS, processedText); break;}
+            sprintf(SongName, "%s", output.c_str());    //throw whole contents into variable
+            token = strtok(SongName, delimiter);    //keep only the contents before first :
+            if (strlen(token) > 32) {Serial.print(processedText); Serial.println(" Song name too long!"); deleteFile(FileFS, processedText); break;}
+            if (strlen(processedText) > 40) {Serial.print(processedText); Serial.println(" Filename too long!");Serial.print(strlen(processedText)); deleteFile(FileFS, processedText); break;}
+            File file = FileFS.open(processedText, "r");  //open each song
+            char buffer[1024]; // Adjust the buffer size as per your requirement
+            memset(buffer, 0, sizeof(buffer));
+            size_t bytesRead = file.readBytes(buffer, sizeof(buffer));
+            file.close();  // Close the file
+            if (bytesRead == 0) {   // Check if any bytes were read
+              Serial.print(processedText);
+              Serial.println("Empty RTTTL file!");
+              deleteFile(FileFS, processedText);
+              break;
+            }
+            if (validate_rtttl(buffer)) { // Validate the RTTTL contents
+              Serial.print(processedText);
+              Serial.println(" is valid!");
+              sprintf(songsArray[totalSongs], "%s",token);         //throw song title from file into array
+              sprintf(filesArray[totalSongs], "%s", processedText);  //throw full path and name into array
+              listOfSong[songsArray[totalSongs]] = filesArray[totalSongs]; 
+              totalSongs++;
+            } else {
+              Serial.print(processedText); 
+              Serial.println(" Invalid RTTTL format!");
+              deleteFile(FileFS, processedText); 
+              //   break;
+            }
+      } else {
+        FileFS.remove(processedText);
+        fileBad = 0;
+      }
+    }
+  }
+  totalSongs--;  //strip off last file count
+  Serial.print("Total Songs found: ");
+  Serial.println(totalSongs+1);  //tell the human a human file count
+  serializeJson(listOfSong, Serial);
+  Serial.println(" ");
+  Serial.println(sizeof(listOfSong));
+  listDir(FileFS, "/songs/", 0);
+  return;
+}
+
+bool is_valid_attribute(int value, const int* valid_values, int array_size) {
+  for (int i = 0; i < array_size; i++) {
+    if (valid_values[i] == value) return true;
+  }
+  return false;
+}
+
+bool validate_rtttl(char* rtttl) {
+  // Parsing variables
+  int duration, octave, beats;
+  char delimiter;
+  // Check format and extract metadata
+  if (sscanf(rtttl, "%*[^:]:d=%d,o=%d,b=%d%c", &duration, &octave, &beats, &delimiter) != 4 ||
+      !is_valid_attribute(duration, valid_durations, sizeof(valid_durations) / sizeof(valid_durations[0])) ||
+      !is_valid_attribute(octave, valid_octaves, sizeof(valid_octaves) / sizeof(valid_octaves[0])) ||
+      !is_valid_attribute(beats, valid_beats, sizeof(valid_beats) / sizeof(valid_beats[0])) ||
+      delimiter != ':') {
+    Serial.println(rtttl);
+    Serial.println(" Invalid metadata");
+    return false; // Invalid format or metadata
+  }
+  // Locate the start of notes section
+  const char* pos = strchr(strchr(rtttl, ':') + 1, ':') + 1;
+  // Validate notes
+while (*pos && *pos != '\0') {
+  char token[7];
+  sscanf(pos, "%6[^,]%c", token, &delimiter);
+  // Validate the token against the allowed patterns
+  bool isValidToken = false;
+  if (strlen(token) == 1) {
+    if (strchr("abcdefghp", token[0])) {
+      isValidToken = true;
+    }
+  } else if (strlen(token) == 2) {
+    if ((strchr("abcdefghp", token[0]) && token[1] == '#') ||
+        (strchr("abcdefghp", token[0]) && token[1] == '.') ||
+        (strchr("abcdefghp", token[0]) && strchr("12345678", token[1])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]))) {
+      isValidToken = true;
+    }
+  } else if (strlen(token) == 3) {
+    if ((strchr("abcdefghp", token[0]) && strchr("12345678", token[1]) && token[2] == '.') ||
+        (strchr("abcdefghp", token[0]) && token[1] == '.'&& strchr("12345678", token[2])) ||
+        (strchr("abcdefghp", token[0]) && token[1] == '#' && token[2] == '.') ||
+        (strchr("abcdefghp", token[0]) && token[1] == '#' && strchr("12345678", token[2])) ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '#') ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '.') ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && strchr("12345678", token[2]))) {
+      isValidToken = true;
+    }
+  } else if (strlen(token) == 4) {
+    if ((strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '#' && strchr("12345678", token[3])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '#' && token[3] == '.') ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '.') ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && strchr("12345678", token[3])) ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '#') ||
+        (strchr("abcdefghp", token[0]) && token[1] == '#' && strchr("12345678", token[2]) && token[3] == '.') ||
+        (strchr("abcdefghp", token[0]) && token[1] == '#' && token[2] == '.' && strchr("12345678", token[3])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '.' && strchr("12345678", token[3])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && strchr("12345678", token[2]) && token[3] == '.')) {
+      isValidToken = true;
+    }
+  } else if (strlen(token) == 5) {
+    if ((strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '#' && token[4] == '.') ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '#'  && token[3] == '.'&& strchr("12345678", token[4])) ||
+        (strchr("1248", token[0]) && strchr("abcdefghp", token[1]) && token[2] == '#' && strchr("12345678", token[3]) && token[4] == '.') ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '.' && strchr("12345678", token[4])) ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && strchr("12345678", token[3]) && token[4] == '.') ||
+        (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '#' && strchr("12345678", token[4]))) {
+      isValidToken = true;
+    }
+  } else if (strlen(token) == 6) {
+    if ((strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '#' && strchr("12345678", token[4]) && token[5] == '.') ||
+    (strchr("13", token[0]) && strchr("26", token[1]) && strchr("abcdefghp", token[2]) && token[3] == '#' && token[4] == '.' && strchr("12345678", token[5]))) {
+      isValidToken = true;
+    }
+  } 
+  if (isValidToken) {
+  //  Serial.println(token);
+  } else {
+    Serial.print(token);
+    Serial.println(" Invalid note format");
+    return false; // Invalid note format
+  }
+  pos = strchr(pos, ',');
+  if (pos == NULL) {
+    return true; // RTTTL file is valid
+    break; // Exit the loop if no more comma found
+  }
+  pos += 1; // Move to the next note after the comma
+}
+  return true; // RTTTL file is valid
+}
+#endif
 
 
 void writeFile(fs::FS &fs, const char * path, const char * message){
@@ -2112,6 +3832,28 @@ void writeFile(fs::FS &fs, const char * path, const char * message){
    }
 }
 
+#if HAS_BUZZER
+void playRTTTLsong(String goforit, int chimeNumber)
+{
+  File file = FileFS.open(goforit, "r");
+          Serial.print("goforit ");
+          Serial.println(goforit);
+  //Check if the file exists
+  if(!file){
+    Serial.println("No Saved Data!"); 
+    return;
+  }
+  String output;
+  while (file.available()) {
+    char intRead = file.read();
+    output += intRead;
+  }
+  file.close();
+  pinMode(BUZZER_PIN, OUTPUT);
+  rtttl::begin(BUZZER_PIN, output.c_str());  
+  while( !rtttl::done() ){ rtttl::play();}
+}
+#endif
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
    Serial.printf("Listing directory: %s\r\n", dirname);
@@ -2195,6 +3937,7 @@ void processSchedules(bool alarmType) {
       int month = (int)jsonObj["month"];
       int day = (int)jsonObj["day"];
       int recurring = (int)jsonObj["recurring"];
+      int preset = jsonObj.containsKey("preset") ? (int)jsonObj["preset"] : 0;
       String uid = jsonObj["uid"].as<String>();
 /*
     "scheduleType": "3",
@@ -2284,6 +4027,30 @@ void processSchedules(bool alarmType) {
       if ((dayOfweek == 0 && sun == 1) || (dayOfweek == 1 && mon == 1) || (dayOfweek == 2 && tue == 1) || (dayOfweek == 3 && wed == 1) || (dayOfweek == 4 && thu == 1) || (dayOfweek == 5 && fri == 1) || (dayOfweek == 6 && sat == 1)) {   //day of week match?
         if (((daymode == 1) && ((hour >= 8) && (hour <=19 ))) || (daymode == 0)) {  //datlight mode is right or not on?
           if (((dailyType == 1) && ((hours == hour && minutes == mins) || (hours == 99 && minutes == mins) || (hours == hour && mins == 99 && minutes == 0))) || (((hourlyType == 15) && (minsSixty % 15 == 0)) || ((hourlyType == 30) && (minsSixty % 30 == 0)) || ((hourlyType == 60) && (minsSixty % 60 == 0))) || ((dailyType == 0) && ((hourlyType == 99) && (minsSixty % 60 == 0)))) {  //specific time or hourly type is right, or hourlytype 15,30,60?        
+            #if HAS_BUZZER
+              if (gongmode && (dailyType == 0) && (hourlyType == 99) && (minsSixty % 60 == 0)){  //hourly bongs should always run as secondary because of the uid file name
+                // Makes sure the bongs are between 1 and 12. 
+                int numberofChimes = hour;
+                if (numberofChimes == 0) numberofChimes = 12;
+                else if (numberofChimes > 12) numberofChimes -= 12;
+                for(int i = 0; i < numberofChimes; i++) {
+                  playRTTTLsong(listOfSong[song], 1);
+                 }
+                }  else {
+                playRTTTLsong(listOfSong[song], 1);
+                }
+            #endif
+            // Apply preset if specified (1..4) and file exists
+            if (preset > 0 && preset <= 4) {
+              char presetPath[64];
+              sprintf(presetPath, "/settings/clockSettings-preset%d.json", preset);
+              if (FileFS.exists(presetPath)) {
+                char presetName[16];
+                sprintf(presetName, "preset%d", preset);
+                getclockSettings(String(presetName));
+                allBlank();
+              }
+            }
            // if (!breakOutSet) {scroll(title);}
           //  allBlank();
           }
@@ -2315,11 +4082,36 @@ void processSchedules(bool alarmType) {
 
     if ((dom == mday) || (dom == 34 && (mday == currentEOM)) || (dom == 33 && (mday == (currentEOM-1))) || (dom == 32 && (mday == (currentEOM-2))))  {    // Check DOM and EOM
       if (((hours == hour && minutes == mins) || (hours == 99 && minutes == mins) || (hours == hour && mins == 99 && minutes == 0))) {  //time, some minute all day, sloppy top of hour
-              if (!breakOutSet) {scroll(title);}
+            #if HAS_BUZZER
+              playRTTTLsong(listOfSong[song], 1);
+            #endif
+            // Apply preset if specified (1..4) and file exists
+            if (preset > 0 && preset <= 4) {
+              char presetPath[64];
+              sprintf(presetPath, "/settings/clockSettings-preset%d.json", preset);
+              if (FileFS.exists(presetPath)) {
+                char presetName[16];
+                sprintf(presetName, "preset%d", preset);
+                getclockSettings(String(presetName));
+                allBlank();
+              }
+            }
+              if (!breakOutSet) {scroll(title);} 
               allBlank(); 
       } else {
+            #if HAS_BUZZER
+        if (!jsonObj["song"].isNull()) {
+            strcpy(specialAudibleAlarm, jsonObj["song"]);
+           
+      //    Serial.println(defaultAudibleAlarm);
+      //    Serial.println(specialAudibleAlarm);
+        }
+            #endif
         }
     } else {
+            #if HAS_BUZZER
+          sprintf(specialAudibleAlarm, "%s", defaultAudibleAlarm);
+            #endif
       }
    }  //end of Monthly schedule type
 
@@ -2338,7 +4130,21 @@ void processSchedules(bool alarmType) {
             deleteFile(FileFS, processedText);  //delete non-recurring schedule
             fileChanged = 1;
           }
-          if (!breakOutSet) {scroll(title);}
+            #if HAS_BUZZER
+              playRTTTLsong(listOfSong[song], 1);
+            #endif
+          // Apply preset if specified (1..4) and file exists
+          if (preset > 0 && preset <= 4) {
+            char presetPath[64];
+            sprintf(presetPath, "/settings/clockSettings-preset%d.json", preset);
+            if (FileFS.exists(presetPath)) {
+              char presetName[16];
+              sprintf(presetName, "preset%d", preset);
+              getclockSettings(String(presetName));
+              allBlank();
+            }
+          }
+          if (!breakOutSet) {scroll(title);} 
           allBlank(); 
         }
    }  //end of Date schedule type
@@ -2346,19 +4152,57 @@ void processSchedules(bool alarmType) {
 
    if (scheduleType == 3)  {   //3 = Special Date schedule type
      if (mont == month && mday == day) {
-          Serial.println("special alarm");
+         // Serial.println("special alarm");
           //fix in future, play song
+        #if HAS_BUZZER
+          if (!jsonObj["song"].isNull()) {
+              strcpy(specialAudibleAlarm, jsonObj["song"]);
+          //  Serial.println(defaultAudibleAlarm);
+          //  Serial.println(specialAudibleAlarm);
+        }
+        #endif
         if (hour == 12 && mins == 0) {
-          if (!breakOutSet) {scroll(title);}
+          #if HAS_BUZZER
+            playRTTTLsong(listOfSong[song], 1);
+          #endif
+          // Apply preset if specified (1..4) and file exists
+          if (preset > 0 && preset <= 4) {
+            char presetPath[64];
+            sprintf(presetPath, "/settings/clockSettings-preset%d.json", preset);
+            if (FileFS.exists(presetPath)) {
+              char presetName[16];
+              sprintf(presetName, "preset%d", preset);
+              getclockSettings(String(presetName));
+              allBlank();
+            }
+          }
+          if (!breakOutSet) {scroll(title);} 
           allBlank(); 
         } 
      } else {
-     }
+            #if HAS_BUZZER
+              sprintf(specialAudibleAlarm, "%s", defaultAudibleAlarm);
+            #endif
+            }  
    }  //end of Special Date schedule type
 
    if (scheduleType == 4)  {   //4 = New Years schedule type
     if (mont == 01 && mday == 01 && hour == 0 && mins == 0) {
-          if (!breakOutSet) {scroll(title);}
+            #if HAS_BUZZER
+              playRTTTLsong("/settings/auldlang.rttl", 1);
+            #endif
+          // Apply preset if specified (1..4) and file exists
+          if (preset > 0 && preset <= 4) {
+            char presetPath[64];
+            sprintf(presetPath, "/settings/clockSettings-preset%d.json", preset);
+            if (FileFS.exists(presetPath)) {
+              char presetName[16];
+              sprintf(presetName, "preset%d", preset);
+              getclockSettings(String(presetName));
+              allBlank();
+            }
+          }
+          if (!breakOutSet) {scroll(title);} 
           allBlank(); 
     }
    }  //end of New Years schedule type
@@ -2372,10 +4216,6 @@ void processSchedules(bool alarmType) {
 void createSchedulesArray() {
   JsonArray dataArray = jsonScheduleData.to<JsonArray>(); // create a JSON array to store the data
   File dir = FileFS.open("/scheduler"); // open the directory containing the text files
-  if (!dir) {
-    Serial.println("Failed to open /scheduler directory");
-    return;
-  }
   while (true) { // loop through each file in the directory
     File file = dir.openNextFile();
     if (!file) break; // end the loop when there are no more files
@@ -2412,6 +4252,7 @@ void createSchedulesArray() {
       int month = jsonObj["month"];
       int day = jsonObj["day"];
       int recurring = jsonObj["recurring"];
+      int preset = jsonObj.containsKey("preset") ? (int)jsonObj["preset"] : 0;
       String uid = jsonObj["uid"];
       /* Display the values for testing
       Serial.print("scheduleType = ");
@@ -2480,6 +4321,7 @@ void createSchedulesArray() {
       fileData["month"] = month;
       fileData["day"] = day;
       fileData["recurring"] = recurring;
+      fileData["preset"] = preset;
       fileData["uid"] = uid;
     }
     file.close();
@@ -2498,22 +4340,9 @@ void getclockSettings(String fileType) {
   sprintf(new_filename, "/settings/clockSettings-%s.json", fileType); //build filename and path from argument
   Serial.print("Opening ");
   Serial.println(new_filename);
-
-  // Check if file exists
-  if (!FileFS.exists(new_filename)) {
-    Serial.println("Settings file not found - using defaults");
-    return;
-  }
-
   JsonArray dataArray = jsonDoc.to<JsonArray>(); // create a JSON array to store the data
   File file = FileFS.open(new_filename); // open the directory containing the text files
-  if (!file) {
-    Serial.println("Failed to open settings file");
-    return;
-  }
-
   String fileContent = file.readString(); // read the contents of the file
-  file.close();
   JsonObject fileData = dataArray.createNestedObject(); // create a JSON object to store the file data
   Serial.println(fileContent);
   //Parse the JSON string into a JSON object
@@ -2538,16 +4367,28 @@ void getclockSettings(String fileType) {
   colorchangeCD = jsonObj["colorchangeCD"].as<bool>();
   dateDisplayType = jsonObj["dateDisplayType"].as<byte>();
   gmtOffset_sec = jsonObj["gmtOffset_sec"].as<long>();
+  humiColorSettings = jsonObj["humiColorSettings"].as<byte>();
+  humiDisplayType = jsonObj["humiDisplayType"].as<byte>();
   lightshowMode = jsonObj["lightshowMode"].as<int>();
   pastelColors = jsonObj["pastelColors"].as<byte>();
   spotlightsColorValue = jsonObj["spotlightsColor"].as<uint32_t>();
   spotlightsColor      = CRGB(spotlightsColorValue);
+  humiColorValue = jsonObj["humiColor"].as<uint32_t>();
+  humiColor      = CRGB(humiColorValue);
+  humiSymbolColorValue = jsonObj["humiSymbolColor"].as<uint32_t>();
+  humiSymbolColor      = CRGB(humiSymbolColorValue);
+  humiDecimalColorValue = jsonObj["humiDecimalColor"].as<uint32_t>();
+  humiDecimalColor      = CRGB(humiDecimalColorValue);
   scoreboardColorLeftValue = jsonObj["scoreboardColorLeft"].as<uint32_t>();
   scoreboardColorLeft      = CRGB(scoreboardColorLeftValue);
   scoreboardColorRightValue = jsonObj["scoreboardColorRight"].as<uint32_t>();
   scoreboardColorRight      = CRGB(scoreboardColorRightValue);
+  spectrumColorValue = jsonObj["spectrumColor"].as<uint32_t>();
+  spectrumColor      = CRGB(spectrumColorValue);
   scrollColorValue = jsonObj["scrollColor"].as<uint32_t>();
   scrollColor      = CRGB(scrollColorValue);
+  spectrumBackgroundColorValue = jsonObj["spectrumBackgroundColor"].as<uint32_t>();
+  spectrumBackgroundColor      = CRGB(spectrumBackgroundColorValue);
   hourColorValue = jsonObj["hourColor"].as<uint32_t>();
   hourColor      = CRGB(hourColorValue);
   minColorValue = jsonObj["minColor"].as<uint32_t>();
@@ -2560,6 +4401,13 @@ void getclockSettings(String fileType) {
   monthColor      = CRGB(monthColorValue);
   separatorColorValue = jsonObj["separatorColor"].as<uint32_t>();
   separatorColor      = CRGB(separatorColorValue);
+  tempColorValue = jsonObj["tempColor"].as<uint32_t>();
+  tempColor      = CRGB(tempColorValue);
+  typeColorValue = jsonObj["typeColor"].as<uint32_t>();
+  typeColor      = CRGB(typeColorValue);
+  degreeColorValue = jsonObj["degreeColor"].as<uint32_t>();
+  degreeColor      = CRGB(degreeColorValue);
+  randomSpectrumMode = jsonObj["randomSpectrumMode"].as<byte>();
   realtimeMode = jsonObj["realtimeMode"].as<int>();
   scrollColorSettings = jsonObj["scrollColorSettings"].as<int>();
   scrollFrequency = jsonObj["scrollFrequency"].as<int>();
@@ -2567,14 +4415,55 @@ void getclockSettings(String fileType) {
   scrollOptions2 = jsonObj["scrollOptions2"].as<bool>();
   scrollOptions3 = jsonObj["scrollOptions3"].as<bool>();
   scrollOptions4 = jsonObj["scrollOptions4"].as<bool>();
+  scrollOptions5 = jsonObj["scrollOptions5"].as<bool>();
+  scrollOptions6 = jsonObj["scrollOptions6"].as<bool>();
   scrollOptions7 = jsonObj["scrollOptions7"].as<bool>();
   scrollOptions8 = jsonObj["scrollOptions8"].as<bool>();
+  scrollOptions9 = jsonObj["scrollOptions9"].as<bool>();
   scrollOverride = jsonObj["scrollOverride"].as<bool>();
   scrollText = jsonObj["scrollText"].as<String>();
+  #if HAS_USWEATHER
+    const char* sidStr = jsonObj["stationID"].as<const char*>();
+    if (sidStr) {
+      strncpy(stationID, sidStr, sizeof(stationID) - 1);
+      stationID[sizeof(stationID) - 1] = '\0';
+    }
+    #endif
+  spectrumBackgroundSettings = jsonObj["spectrumBackgroundSettings"].as<byte>();
+  spectrumColorSettings = jsonObj["spectrumColorSettings"].as<byte>();
+  spectrumMode = jsonObj["spectrumMode"].as<int>();
   spotlightsColorSettings = jsonObj["spotlightsColorSettings"].as<int>();
   suspendFrequency = jsonObj["suspendFrequency"].as<int>();
   suspendType = jsonObj["suspendType"].as<byte>();
+  tempColorSettings = jsonObj["tempColorSettings"].as<byte>();
+  tempDisplayType = jsonObj["tempDisplayType"].as<byte>();
+  temperatureCorrection = jsonObj["temperatureCorrection"].as<int>();
+  temperatureSymbol = jsonObj["temperatureSymbol"].as<byte>();
+  #if HAS_BUZZER
+  useAudibleAlarm = jsonObj["useAudibleAlarm"].as<bool>();
+  #endif
   useSpotlights = jsonObj["useSpotlights"].as<bool>();
+  #if HAS_ONLINEWEATHER
+      const char* keyStr = jsonObj["apikey"].as<const char*>();
+    if (keyStr) {
+      strncpy(apikey, keyStr, sizeof(apikey) - 1);
+      apikey[sizeof(apikey) - 1] = '\0';
+    }
+    #endif
+    #if HAS_ONLINEWEATHER || HAS_USWEATHER
+    humidity_outdoor_enable = jsonObj["humidity_outdoor_enable"].as<bool>();
+    temperature_outdoor_enable = jsonObj["temperature_outdoor_enable"].as<bool>();
+    const char* latStr = jsonObj["latitude"].as<const char*>();
+    if (latStr) {
+      strncpy(latitude, latStr, sizeof(latitude) - 1);
+      latitude[sizeof(latitude) - 1] = '\0';
+    }
+      const char* lonStr = jsonObj["longitude"].as<const char*>();
+    if (lonStr) {
+      strncpy(longitude, lonStr, sizeof(longitude) - 1);
+      longitude[sizeof(longitude) - 1] = '\0';
+    }
+    #endif
   // Close the file.
   file.close();
 }  
@@ -2660,39 +4549,71 @@ void saveclockSettings(String fileType) {
   clockSettings["dayColor"] = dayColorValue; 
   clockSettings["monthColor"] = monthColorValue; 
   clockSettings["separatorColor"] = separatorColorValue; 
+  clockSettings["tempColor"] = tempColorValue; 
+  clockSettings["typeColor"] = typeColorValue; 
+  clockSettings["degreeColor"] = degreeColorValue; 
+  clockSettings["humiColor"] = humiColorValue; 
+  clockSettings["humiSymbolColor"] = humiSymbolColorValue; 
+  clockSettings["humiDecimalColor"] = humiDecimalColorValue; 
   clockSettings["scoreboardColorLeft"] = scoreboardColorLeftValue; 
   clockSettings["scoreboardColorRight"] = scoreboardColorRightValue; 
+  clockSettings["spectrumColor"] = spectrumColorValue; 
   clockSettings["scrollColor"] = scrollColorValue; 
+  clockSettings["spectrumBackgroundColor"] = spectrumBackgroundColorValue; 
   clockSettings["clockMode"] = clockMode;
   clockSettings["pastelColors"] = pastelColors;
+  clockSettings["temperatureSymbol"] = temperatureSymbol;
   clockSettings["ClockColorSettings"] = ClockColorSettings;
   clockSettings["DateColorSettings"] = DateColorSettings;
+  clockSettings["tempColorSettings"] = tempColorSettings;
+  clockSettings["humiColorSettings"] = humiColorSettings;
+  clockSettings["tempDisplayType"] = tempDisplayType;
+  clockSettings["humiDisplayType"] = humiDisplayType;
+  clockSettings["temperatureCorrection"] = temperatureCorrection;
   clockSettings["colonType"] = colonType;
   clockSettings["ColorChangeFrequency"] = ColorChangeFrequency;
   clockSettings["scrollText"] = scrollText;
+  #if HAS_USWEATHER
+    clockSettings["stationID"] = stationID;
+    #endif
   clockSettings["clockDisplayType"] = clockDisplayType;
   clockSettings["dateDisplayType"] = dateDisplayType;
   clockSettings["colorchangeCD"] = colorchangeCD;
+  #if HAS_BUZZER
+  clockSettings["useAudibleAlarm"] = useAudibleAlarm;
+  #endif
+  clockSettings["spectrumMode"] = spectrumMode;
   clockSettings["realtimeMode"] = realtimeMode;
+  clockSettings["spectrumColorSettings"] = spectrumColorSettings;
+  clockSettings["spectrumBackgroundSettings"] = spectrumBackgroundSettings;
   clockSettings["spotlightsColorSettings"] = spotlightsColorSettings;
   clockSettings["brightness"] = brightness;
   clockSettings["useSpotlights"] = useSpotlights;
   clockSettings["scrollColorSettings"] = scrollColorSettings;
   clockSettings["scrollFrequency"] = scrollFrequency;
-  // clockSettings["scrollOverride"] = scrollOverride;
-  // clockSettings["scrollOptions1"] = scrollOptions1;
-  // clockSettings["scrollOptions2"] = scrollOptions2;
-  // clockSettings["scrollOptions3"] = scrollOptions3;
-  // clockSettings["scrollOptions4"] = scrollOptions4;
-  // clockSettings["scrollOptions5"] = scrollOptions5;
-  // clockSettings["scrollOptions6"] = scrollOptions6;
-  // clockSettings["scrollOptions7"] = scrollOptions7;
-  // clockSettings["scrollOptions8"] = scrollOptions8;
-  // clockSettings["scrollOptions9"] = scrollOptions9;
+  clockSettings["randomSpectrumMode"] = randomSpectrumMode;
+  clockSettings["scrollOverride"] = scrollOverride;
+  clockSettings["scrollOptions1"] = scrollOptions1;
+  clockSettings["scrollOptions2"] = scrollOptions2;
+  clockSettings["scrollOptions3"] = scrollOptions3;
+  clockSettings["scrollOptions4"] = scrollOptions4;
+  clockSettings["scrollOptions5"] = scrollOptions5;
+  clockSettings["scrollOptions6"] = scrollOptions6;
+  clockSettings["scrollOptions7"] = scrollOptions7;
+  clockSettings["scrollOptions8"] = scrollOptions8;
+  clockSettings["scrollOptions9"] = scrollOptions9;
   clockSettings["lightshowMode"] = lightshowMode;
   clockSettings["suspendFrequency"] = suspendFrequency;
   clockSettings["suspendType"] = suspendType;
-  
+  #if HAS_ONLINEWEATHER
+    clockSettings["apikey"] = apikey;
+    #endif
+    #if HAS_ONLINEWEATHER || HAS_USWEATHER
+    clockSettings["humidity_outdoor_enable"] = humidity_outdoor_enable;
+    clockSettings["temperature_outdoor_enable"] = temperature_outdoor_enable;
+    clockSettings["latitude"] = latitude;
+    clockSettings["longitude"] = longitude;
+    #endif
 
 // 3) write it out
 File file = FileFS.open(oldName, FILE_WRITE);
@@ -2713,102 +4634,6 @@ Serial.println("Settings saved successfully. Old backups (if any) removed.");
 
 
 void loadWebPageHandlers() {
-  server.on("/goClockMode", HTTP_POST, []() {
-    allBlank();
-    clockMode = 0;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    printLocalTime();
-    breakOutSet = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goDateMode", HTTP_POST, []() {
-    allBlank();
-    clockMode = 7;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goScrollingMode", HTTP_POST, []() {
-    allBlank();
-    clockMode = 11;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goDisplayOffMode", HTTP_POST, []() {
-    allBlank();
-    clockMode = 10;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    breakOutSet = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goLightshowMode", HTTP_POST, []() {
-    if (server.hasArg("lightshowMode")) {
-      lightshowMode = server.arg("lightshowMode").toInt();
-    }
-    allBlank();
-    oldsnakecolor = CRGB::Green;
-    getSlower = 180;
-    clockMode = 5;
-    realtimeMode = 1;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goCountdownMode", HTTP_POST, []() {
-    if (server.hasArg("ms")) {
-      countdownMilliSeconds = server.arg("ms").toInt();
-    }
-    if (countdownMilliSeconds < 1000) {countdownMilliSeconds = 1000;}
-    if (countdownMilliSeconds > 86400000) {countdownMilliSeconds = 86400000;}
-    endCountDownMillis = millis() + countdownMilliSeconds;
-    if (currentMode == 0) {currentMode = clockMode; currentReal = realtimeMode;}
-    allBlank();
-    clockMode = 1;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goStopwatchMode", HTTP_POST, []() {
-    if (server.hasArg("ms")) {
-      countdownMilliSeconds = server.arg("ms").toInt();
-    }
-    if (countdownMilliSeconds < 1000) {countdownMilliSeconds = 1000;}
-    if (countdownMilliSeconds > 86400000) {countdownMilliSeconds = 86400000;}
-    CountUpMillis = millis();
-    endCountDownMillis = millis() + countdownMilliSeconds;
-    if (currentMode == 0) {currentMode = clockMode; currentReal = realtimeMode;}
-    allBlank();
-    clockMode = 4;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/goScoreboardMode", HTTP_POST, []() {
-    if (server.hasArg("left")) {
-      scoreboardLeft = server.arg("left").toInt();
-    }
-    if (server.hasArg("right")) {
-      scoreboardRight = server.arg("right").toInt();
-    }
-    if (scoreboardLeft < 0) {scoreboardLeft = 0;}
-    if (scoreboardLeft > 99) {scoreboardLeft = 99;}
-    if (scoreboardRight < 0) {scoreboardRight = 0;}
-    if (scoreboardRight > 99) {scoreboardRight = 99;}
-    allBlank();
-    clockMode = 3;
-    realtimeMode = 0;
-    updateSettingsRequired = 1;
-    server.send(200, "text/plain", "OK");
-  });
  
   server.on("/gethome", []() {
     DynamicJsonDocument json(1500);
@@ -2816,6 +4641,13 @@ void loadWebPageHandlers() {
     if (updateSettingsRequired == 1) { saveclockSettings("generic"); updateSettingsRequired = 0; }  //if something was changed in settings, write those changes when the home page is loaded.
     json["scoreboardLeft"] = scoreboardLeft;
     json["scoreboardRight"] = scoreboardRight;
+    json["HAS_DHT"] = HAS_DHT;
+    json["HAS_RTC"] = HAS_RTC;
+    json["HAS_SOUNDDETECTOR"] = HAS_SOUNDDETECTOR;
+    json["HAS_BUZZER"] = HAS_BUZZER;
+    json["HAS_PHOTOSENSOR"] = HAS_PHOTOSENSOR;
+    json["HAS_ONLINEWEATHER"] = HAS_ONLINEWEATHER;
+    json["HAS_USWEATHER"] = HAS_USWEATHER;
     serializeJson(json, output);
     server.send(200, "application/json", output);
   });
@@ -2825,7 +4657,10 @@ void loadWebPageHandlers() {
     String output;
   //  char spotlightsColor[8];
   //  char dayColor[8], monthColor[8], separatorColor[8];
+  //  char tempColor[8], typeColor[8], degreeColor[8];
+ //   char humiDecimalColor[8], humiSymbolColor[8];
  //   char countdownColor[8], scoreboardColorLeft[8], scoreboardColorRight[8];
+ //   char spectrumColor[8], spectrumBackgroundColor[8], scrollingColor[8];
     json["pastelColors"] = pastelColors;
     json["ColorChangeFrequency"] = ColorChangeFrequency;
     json["rangeBrightness"] = brightness;
@@ -2839,7 +4674,7 @@ void loadWebPageHandlers() {
     json["gmtOffset_sec"] = gmtOffset_sec;
     json["DSTime"] = DSTime;
     json["ClockColorSettings"] = ClockColorSettings;
-    json["hourColor"] = prefGetU32("hourColor", 0xFF0000);
+    json["hourColor"] = hourColorValue;
     json["minColor"] = minColorValue;
     json["colonColor"] = colonColorValue;
     json["dateDisplayType"] = dateDisplayType;
@@ -2847,44 +4682,78 @@ void loadWebPageHandlers() {
     json["dayColor"] = dayColorValue;
     json["monthColor"] = monthColorValue;
     json["separatorColor"] = separatorColorValue;
+    json["temperatureSymbol"] = temperatureSymbol;
+    json["temperatureCorrection"] = temperatureCorrection;
+    json["tempDisplayType"] = tempDisplayType;
+    json["tempColorSettings"] = tempColorSettings;
+    json["tempColor"] = tempColorValue;
+    json["typeColor"] = typeColorValue;
+    json["degreeColor"] = degreeColorValue;
+    json["humiDisplayType"] = humiDisplayType;
+    json["humiColorSettings"] = humiColorSettings;
+    json["humiColor"] = humiColorValue; 
+    json["humiDecimalColor"] = humiDecimalColorValue;
+    json["humiSymbolColor"] = humiSymbolColorValue;
+#if HAS_BUZZER
+    json["useAudibleAlarm"] = useAudibleAlarm;
+#endif
     json["colorchangeCD"] = colorchangeCD;
     json["countdownColor"] = countdownColorValue;
     json["scoreboardColorLeft"] = scoreboardColorLeftValue;
     json["scoreboardColorRight"] = scoreboardColorRightValue;
+    json["randomSpectrumMode"] = randomSpectrumMode;
+    json["spectrumColor"] = spectrumColorValue;
+    json["spectrumBackgroundColor"] = spectrumBackgroundColorValue;
+    json["spectrumBackgroundSettings"] = spectrumBackgroundSettings;
+    json["spectrumColorSettings"] = spectrumColorSettings;
     json["scrollFrequency"] = scrollFrequency;
     json["scrollOptions1"] = scrollOptions1;
     json["scrollOptions2"] = scrollOptions2;
     json["scrollOptions3"] = scrollOptions3;
     json["scrollOptions4"] = scrollOptions4;
+    json["scrollOptions5"] = scrollOptions5;
+    json["scrollOptions6"] = scrollOptions6;
     json["scrollOptions7"] = scrollOptions7;
     json["scrollOptions8"] = scrollOptions8;
+    json["scrollOptions9"] = scrollOptions9;
     json["scrollText"] = scrollText;
     json["scrollOverride"] = scrollOverride;
     json["scrollColor"] = scrollColorValue;
     json["scrollColorSettings"] = scrollColorSettings;
+    #if HAS_ONLINEWEATHER
+      json["weatherapi"]["apikey"] = apikey;
+      #endif
+      #if HAS_USWEATHER
+      json["stationID"] = stationID;
+      #endif
+      #if HAS_ONLINEWEATHER || HAS_USWEATHER
+      json["weatherapi"]["latitude"] = latitude;
+      json["weatherapi"]["longitude"] = longitude;
+      json["humidity_outdoor_enable"] = humidity_outdoor_enable;
+      json["temperature_outdoor_enable"] = temperature_outdoor_enable;
+    #endif
+    json["HAS_DHT"] = HAS_DHT;
+    json["HAS_RTC"] = HAS_RTC;
+    json["HAS_SOUNDDETECTOR"] = HAS_SOUNDDETECTOR;
+    json["HAS_BUZZER"] = HAS_BUZZER;
+    json["HAS_PHOTOSENSOR"] = HAS_PHOTOSENSOR;
+    json["HAS_ONLINEWEATHER"] = HAS_ONLINEWEATHER;
+    json["HAS_USWEATHER"] = HAS_USWEATHER;
+  #if HAS_BUZZER
+    json["listOfSong"] = listOfSong;
+  #endif
     serializeJson(json, output);
     server.send(200, "application/json", output);
   });
 
   server.on("/updateanything", HTTP_POST, []() {
     DynamicJsonDocument json(1500);
-    String body = server.arg("plain");
-    if (body.length() == 0 && server.args() > 0) {
-      body = server.arg(0);
-    }
-    if (body.length() > 0) {
+    if(server.args() > 0) {
+      String body = server.arg(0);
       Serial.println("----");
       Serial.println(body);
       Serial.println("----");
-      lastUpdateBody = body;
-      lastUpdateAt = millis();
-      DeserializationError err = deserializeJson(json, body);
-      if (err) {
-        Serial.print("JSON parse error: ");
-        Serial.println(err.c_str());
-        server.send(400, "text/json", "{\"result\":\"error\",\"reason\":\"json\"}");
-        return;
-      }
+      deserializeJson(json, server.arg(0));
 
       // pastelColors
       if (!json["pastelColors"].isNull()){
@@ -2903,8 +4772,9 @@ void loadWebPageHandlers() {
       if (!json["spotlightsColorSettings"].isNull()) {
         spotlightsColorSettings = (int)json["spotlightsColorSettings"];
         updateSettingsRequired = 1;
-        prevTime2 = 0;  // Reset timer for immediate update
-        ShelfDownLights();
+        if (spotlightsColorSettings == 5 ){ updateRainForecast(); }
+        if (spotlightsColorSettings == 6 ){ fetchTides(); processCurrentTide(); }
+        ShelfDownLights(); 
       }
 
       // ClockDisplayType
@@ -2942,6 +4812,54 @@ void loadWebPageHandlers() {
         if (clockMode == 7) { allBlank(); } 
       }
 
+      // temperatureSymbol
+      if (!json["temperatureSymbol"].isNull()) {
+        temperatureSymbol = (int)json["temperatureSymbol"];
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
+
+      // tempDisplayType
+      if (!json["tempDisplayType"].isNull()) {
+        tempDisplayType = (int)json["tempDisplayType"];
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
+
+      // tempColorSettings
+      if (!json["tempColorSettings"].isNull()) {
+        tempColorSettings = (int)json["tempColorSettings"];
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); }
+      }
+
+      // humiDisplayType
+      if (!json["humiDisplayType"].isNull()) {
+        humiDisplayType = (int)json["humiDisplayType"];
+        updateSettingsRequired = 1;
+        if (clockMode == 8) { allBlank(); } 
+      }
+
+      // humiColorSettings
+      if (!json["humiColorSettings"].isNull()) {
+        humiColorSettings = (int)json["humiColorSettings"];
+        updateSettingsRequired = 1;
+        if (clockMode == 8) { allBlank(); } 
+      }
+
+      // spectrumBackgroundSettings
+      if (!json["spectrumBackgroundSettings"].isNull()) {
+        spectrumBackgroundSettings = (int)json["spectrumBackgroundSettings"];
+        updateSettingsRequired = 1;
+        if (clockMode == 9) { allBlank(); } 
+      }
+
+      // spectrumColorSettings
+      if (!json["spectrumColorSettings"].isNull()) {
+        spectrumColorSettings = (int)json["spectrumColorSettings"];
+        updateSettingsRequired = 1;
+        if (clockMode == 9) { allBlank(); } 
+      }
 
       // scrollColorSettings
       if (!json["scrollColorSettings"].isNull()) {
@@ -2973,11 +4891,22 @@ void loadWebPageHandlers() {
         gmtOffset_sec = (long)json["gmtOffset_sec"];
         configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
         if(!getLocalTime(&timeinfo)){Serial.println("Error, no NTP Server found!");}
+        #if HAS_RTC
+          int tempyear = (timeinfo.tm_year +1900);
+          int tempmonth = (timeinfo.tm_mon + 1);
+          rtc.adjust(DateTime(tempyear, tempmonth, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+        #endif
         updateSettingsRequired = 1;
         if (clockMode == 0) { allBlank(); } 
         printLocalTime(); 
       }
 
+      // temperatureCorrection
+      if (!json["temperatureCorrection"].isNull()) {
+        temperatureCorrection = (int)json["temperatureCorrection"];
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
 
       // scrollFrequency
       if (!json["scrollFrequency"].isNull()) {
@@ -2990,9 +4919,7 @@ void loadWebPageHandlers() {
       if (!json["rangeBrightness"].isNull()) {
         brightness = (int)json["rangeBrightness"];
         updateSettingsRequired = 1;
-        FastLED.setBrightness(brightness);  // Sofort anwenden
-        FastLED.show();  // Sofort anzeigen
-        prevTime2 = 0;  // Reset timer for ShelfDownLights
+        ShelfDownLights();
       }
       
       // spotlightsColor
@@ -3000,7 +4927,6 @@ void loadWebPageHandlers() {
         spotlightsColorValue = json["spotlightsColor"].as<uint32_t>();
         spotlightsColor      = CRGB(spotlightsColorValue);
         updateSettingsRequired = 1;
-        prevTime2 = 0;  // Reset timer for immediate update
         ShelfDownLights();
       }
 
@@ -3008,7 +4934,6 @@ void loadWebPageHandlers() {
       if (!json["hourColor"].isNull()) {
         hourColorValue = json["hourColor"].as<uint32_t>();
         hourColor      = CRGB(hourColorValue);
-        prefPutU32("hourColor", hourColorValue);  // <<< hinzufügen
         updateSettingsRequired = 1;
         if (clockMode == 0) { allBlank(); } 
       }
@@ -3052,6 +4977,54 @@ void loadWebPageHandlers() {
         updateSettingsRequired = 1;
         if (clockMode == 7) { allBlank(); } 
       }
+      
+      // tempColor
+      if (!json["tempColor"].isNull()) {
+        tempColorValue = json["tempColor"].as<uint32_t>();
+        tempColor      = CRGB(tempColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
+
+      // typeColor
+      if (!json["typeColor"].isNull()) {
+        typeColorValue = json["typeColor"].as<uint32_t>();
+        typeColor      = CRGB(typeColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
+
+      // degreeColor
+      if (!json["degreeColor"].isNull()) {
+        degreeColorValue = json["degreeColor"].as<uint32_t>();
+        degreeColor      = CRGB(degreeColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 2) { allBlank(); } 
+      }
+
+      // humiColor
+      if (!json["humiColor"].isNull()) {
+        humiColorValue = json["humiColor"].as<uint32_t>();
+        humiColor      = CRGB(humiColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 8) { allBlank(); } 
+      }
+
+       // humiDecimalColor
+      if (!json["humiDecimalColor"].isNull()) {
+        humiDecimalColorValue = json["humiDecimalColor"].as<uint32_t>();
+        humiDecimalColor      = CRGB(humiDecimalColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 8) { allBlank(); } 
+      }
+
+      // humiSymbolColor
+      if (!json["humiSymbolColor"].isNull()) {
+        humiSymbolColorValue = json["humiSymbolColor"].as<uint32_t>();
+        humiSymbolColor      = CRGB(humiSymbolColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 8) { allBlank(); } 
+      }
 
       // countdownColor
       if (!json["countdownColor"].isNull()) {
@@ -3077,6 +5050,13 @@ void loadWebPageHandlers() {
         if (clockMode == 3) { allBlank(); } 
       }
 
+      // spectrumColor
+      if (!json["spectrumColor"].isNull()) {
+        spectrumColorValue = json["spectrumColor"].as<uint32_t>();
+        spectrumColor      = CRGB(spectrumColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 9) { allBlank(); }
+      }
 
       // scrollColor
       if (!json["scrollColor"].isNull()) {
@@ -3086,14 +5066,20 @@ void loadWebPageHandlers() {
         if (clockMode == 11) { allBlank(); } 
       }
 
+      // spectrumBackgroundColor
+      if (!json["spectrumBackgroundColor"].isNull()) {
+        spectrumBackgroundColorValue = json["spectrumBackgroundColor"].as<uint32_t>();
+        spectrumBackgroundColor      = CRGB(spectrumBackgroundColorValue);
+        updateSettingsRequired = 1;
+        if (clockMode == 9) { allBlank(); } 
+      }
 
       // useSpotlights
       if (!json["useSpotlights"].isNull()) {
         if ( json["useSpotlights"] == true) {useSpotlights = 1;}
         if ( json["useSpotlights"] == false) {useSpotlights = 0;}
         updateSettingsRequired = 1;
-        prevTime2 = 0;  // Reset timer for immediate update
-        ShelfDownLights();
+        ShelfDownLights(); 
       }
 
       // DSTime
@@ -3102,11 +5088,25 @@ void loadWebPageHandlers() {
         if ( json["DSTime"] == false) {DSTime = 0;}
         configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
         if(!getLocalTime(&timeinfo)){Serial.println("Error, no NTP Server found!");}
+        #if HAS_RTC
+          int tempyear = (timeinfo.tm_year +1900);
+          int tempmonth = (timeinfo.tm_mon + 1);
+          rtc.adjust(DateTime(tempyear, tempmonth, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+        #endif
         updateSettingsRequired = 1;
         if (clockMode == 0) { allBlank(); } 
         printLocalTime(); 
       }
 
+  #if HAS_BUZZER
+      // useAudibleAlarm
+      if (!json["useAudibleAlarm"].isNull()) {
+        if ( json["useAudibleAlarm"] == true) {useAudibleAlarm = 1;}
+        if ( json["useAudibleAlarm"] == false) {useAudibleAlarm = 0;}
+        updateSettingsRequired = 1;
+        if ((clockMode == 1) || (clockMode == 4)) { allBlank(); } 
+      }
+  #endif
 
       // colorchangeCD
       if (!json["colorchangeCD"].isNull()) {
@@ -3116,6 +5116,13 @@ void loadWebPageHandlers() {
         if ((clockMode == 1) || (clockMode == 4)) { allBlank(); } 
       }
 
+      // randomSpectrumMode
+      if (!json["randomSpectrumMode"].isNull()) {
+        if ( json["randomSpectrumMode"] == true) {randomSpectrumMode = 1;}
+        if ( json["randomSpectrumMode"] == false) {randomSpectrumMode = 0;}
+        updateSettingsRequired = 1;
+        if (clockMode == 9) { allBlank(); } 
+      }
 
       // scrollOptions1 Military Time
       if (!json["scrollOptions1"].isNull()) {
@@ -3145,7 +5152,22 @@ void loadWebPageHandlers() {
       if (!json["scrollOptions4"].isNull()) {
         if ( json["scrollOptions4"] == true) {scrollOptions4 = 1;}
         if ( json["scrollOptions4"] == false) {scrollOptions4 = 0;}
+        updateSettingsRequired = 1;
+        if (clockMode == 11) { allBlank(); } 
+      }
 
+      // scrollOptions5 Temperature
+      if (!json["scrollOptions5"].isNull()) {
+        if ( json["scrollOptions5"] == true) {scrollOptions5 = 1;}
+        if ( json["scrollOptions5"] == false) {scrollOptions5 = 0;}
+        updateSettingsRequired = 1;
+        if (clockMode == 11) { allBlank(); } 
+      }
+
+      // scrollOptions6 Humidity
+      if (!json["scrollOptions6"].isNull()) {
+        if ( json["scrollOptions6"] == true) {scrollOptions6 = 1;}
+        if ( json["scrollOptions6"] == false) {scrollOptions6 = 0;}
         updateSettingsRequired = 1;
         if (clockMode == 11) { allBlank(); } 
       }
@@ -3166,6 +5188,13 @@ void loadWebPageHandlers() {
         if (clockMode == 11) { allBlank(); } 
       }
 
+      // scrollOptions9 Tide Forecast
+      if (!json["scrollOptions9"].isNull()) {
+        if ( json["scrollOptions9"] == true) {scrollOptions9 = 1;}
+        if ( json["scrollOptions9"] == false) {scrollOptions9 = 0;}
+        updateSettingsRequired = 1;
+        if (clockMode == 11) { allBlank(); if (scrollOptions9 == 1) {fetchTides(); processCurrentTide();} } 
+      }
 
       // scrollOverride
       if (!json["scrollOverride"].isNull()) {
@@ -3182,8 +5211,36 @@ void loadWebPageHandlers() {
         updateSettingsRequired = 1;
         if (clockMode == 11) { allBlank(); } 
       }
+      #if HAS_USWEATHER
+        // stationID
+        if (!json["stationID"].isNull()) {
+          const char* temp = json["stationID"].as<const char*>();
+          strncpy(stationID, temp, SID_SIZE - 1);
+          stationID[SID_SIZE - 1] = '\0';
+          updateSettingsRequired = 1;
+          fetchTides(); 
+          processCurrentTide();
+        }
+        #endif
+      // setpreset1
+      if (!json["setpreset1"].isNull()) {
+         saveclockSettings("preset1");
+      }
 
-      
+      // setpreset2
+      if (!json["setpreset2"].isNull()) {
+         saveclockSettings("preset2");
+      }
+
+      // setpreset3
+      if (!json["setpreset3"].isNull()) {
+         saveclockSettings("preset3");
+      }
+
+      // setpreset4
+      if (!json["setpreset4"].isNull()) {
+         saveclockSettings("preset4");
+      }
 
       // setdate
       if (!json["setdate"].isNull()) {
@@ -3193,6 +5250,9 @@ void loadWebPageHandlers() {
           int hourarg = json["setdate"]["hour"].as<int>();
           int minarg = json["setdate"]["min"].as<int>();
           int secarg = json["setdate"]["sec"].as<int>();
+          #if HAS_RTC
+            rtc.adjust(DateTime(yeararg, montharg, dayarg, hourarg, minarg, secarg));   //set time on the RTC of the DS3231
+          #endif
           struct tm tm;
           tm.tm_year = yeararg - 1900;
           tm.tm_mon = montharg - 1;
@@ -3224,6 +5284,22 @@ void loadWebPageHandlers() {
         realtimeMode = 0;   
       }
 
+      // TemperatureMode
+      if (!json["TemperatureMode"].isNull()) {
+        allBlank();
+        clockMode = 2;    
+        realtimeMode = 0;   
+        updateSettingsRequired = 1;
+      }
+
+      // HumidityMode
+      if (!json["HumidityMode"].isNull()) {
+        allBlank();   
+        clockMode = 8;     
+        realtimeMode = 0;   
+        updateSettingsRequired = 1;
+      }
+
       // ScrollingMode
       if (!json["ScrollingMode"].isNull()) {  
           allBlank();   
@@ -3238,11 +5314,35 @@ void loadWebPageHandlers() {
         clockMode = 10;     
         realtimeMode = 0;   
         updateSettingsRequired = 1;
+        #if HAS_BUZZER
+          rtttl::stop();
+        #endif
         breakOutSet = 1;   
       }
-      
 
-      
+      // loadpreset1
+      if (!json["loadPreset1"].isNull()) {
+        getclockSettings("preset1");  
+        allBlank(); 
+      }
+
+      // loadpreset2
+      if (!json["loadPreset2"].isNull()) {
+        getclockSettings("preset2");    
+        allBlank();  
+      }
+
+      // loadpreset3
+      if (!json["loadPreset3"].isNull()) {
+        getclockSettings("preset3");  
+        allBlank(); 
+      }
+
+      // loadpreset4
+      if (!json["loadPreset4"].isNull()) {
+        getclockSettings("preset4");    
+        allBlank();  
+      }
 
       // CountdownMode
       if (!json["CountdownMode"].isNull() || !json["StopwatchMode"].isNull()) {
@@ -3282,10 +5382,74 @@ void loadWebPageHandlers() {
         updateSettingsRequired = 1;
       }
 
+      // spectrumMode
+      if (!json["spectrumMode"].isNull()) {
+        allBlank(); 
+        spectrumMode = json["spectrumMode"].as<int>();
+        clockMode = 9;    
+        realtimeMode = 1;   
+        updateSettingsRequired = 1;
+      }
+
+  #if HAS_BUZZER
+      // set default music
+      if (!json["defaultAudibleAlarm"].isNull()) {
+      //  playRTTTLsong(listOfSong[json["defaultAudibleAlarm"].as<String>()], 1);
+        sprintf(defaultAudibleAlarm, "%s", json["defaultAudibleAlarm"].as<String>());
+        updateSettingsRequired = 1;
+      }
+  #endif
+
+  #if HAS_ONLINEWEATHER || HAS_USWEATHER
+    if (!json["weatherapi"].isNull()) {
+      if (!json["weatherapi"]["latitude"].isNull()) {
+        const char* temp = json["weatherapi"]["latitude"].as<const char*>();
+        strncpy(latitude, temp, LAT_SIZE - 1);
+        latitude[LAT_SIZE - 1] = '\0';
+      }
+      if (!json["weatherapi"]["longitude"].isNull()) {
+        const char* temp = json["weatherapi"]["longitude"].as<const char*>();
+        strncpy(longitude, temp, LON_SIZE - 1);
+        longitude[LON_SIZE - 1] = '\0';
+      }
+        Serial.println(latitude);
+        Serial.println(longitude);
+        updateSettingsRequired = 1;
+    }
+    // humidity
+    if (!json["humidity_outdoor_enable"].isNull()) {
+      if (!json["humidity_outdoor_enable"].isNull()) humidity_outdoor_enable = json["humidity_outdoor_enable"];
+      if ( json["humidity_outdoor_enable"] == true) {humidity_outdoor_enable = 1;}
+      if ( json["humidity_outdoor_enable"] == false) {humidity_outdoor_enable = 0;}
+    Serial.println(humidity_outdoor_enable);
+      updateSettingsRequired = 1;
+    }
+
+    // temperature
+    if (!json["temperature_outdoor_enable"].isNull()) {
+      if (!json["temperature_outdoor_enable"].isNull()) temperature_outdoor_enable = json["temperature_outdoor_enable"];
+      if ( json["temperature_outdoor_enable"] == true) {temperature_outdoor_enable = 1;}
+      if ( json["temperature_outdoor_enable"] == false) {temperature_outdoor_enable = 0;}
+    Serial.println(temperature_outdoor_enable);
+      updateSettingsRequired = 1;
+    }
+  #endif
+  #if HAS_ONLINEWEATHER
+    if (!json["weatherapi"].isNull()) {
+      if (!json["weatherapi"]["apikey"].isNull()) {
+        const char* temp = json["weatherapi"]["apikey"].as<const char*>();
+        strncpy(apikey, temp, API_SIZE - 1);
+        apikey[API_SIZE - 1] = '\0';
+      }
+        Serial.println(apikey);
+        updateSettingsRequired = 1;
+    }
+  #endif
+
+
       server.send(200, "text/json", "{\"result\":\"ok\"}");
-      return;
     } 
-    server.send(400, "text/json", "{\"result\":\"error\",\"reason\":\"empty\"}");
+    server.send(401);
   });
 
   server.on("/playsong", HTTP_POST, []() {
@@ -3296,6 +5460,17 @@ void loadWebPageHandlers() {
       Serial.println(body);
       Serial.println("----");
       deserializeJson(json, server.arg(0));
+  #if HAS_BUZZER
+      // play music
+      if (!json["song"].isNull()) {
+          String songName = listOfSong[json["song"].as<String>()];  // Get the song name as a String
+          Serial.print("songName ");
+          Serial.println(songName);
+          songName.toCharArray(songTaskbuffer, songTaskbufferSize);
+          xQueueSend(jobQueue, songTaskbuffer, (TickType_t)0);
+          Serial.println("play song only");
+      }
+  #endif
     } 
     server.send(204);
   });
@@ -3304,6 +5479,10 @@ void loadWebPageHandlers() {
     DynamicJsonDocument json(16192);
     String output;
     Serial.println("getscheduler running");
+    json["HAS_BUZZER"] = HAS_BUZZER;
+#if HAS_BUZZER
+    json["listOfSong"] = listOfSong;
+#endif
     json["jsonScheduleData"] = jsonScheduleData;
     serializeJson(json, output);
     server.send(200, "application/json", output);
@@ -3377,53 +5556,64 @@ void loadWebPageHandlers() {
   createSchedulesArray();   //update the running schedule json array with the new UID file contents
   });
 
-  server.on("/debugpage", []() {
-    const char* page =
-        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Shelf Clock - Debug</title>"
-        "<style>body{font-family:Arial, sans-serif; padding:16px;} pre{white-space:pre-wrap;} button{margin-right:8px;}</style>"
-        "</head><body>"
-        "<h3>Debug Info</h3>"
-        "<div>"
-        "<button onclick='sendTest()'>Test: Clock Mode</button>"
-        "<button onclick='sendScroll()'>Test: Scroll Mode</button>"
-        "<button onclick='loadDebug()'>Refresh</button>"
-        "</div>"
-        "<div id='status' style='margin-top:8px;'></div>"
-        "<pre id='out'>Loading...</pre>"
-        "<script>"
-        "async function postUpdate(obj){"
-        "const r=await fetch('/updateanything',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});"
-        "const t=await r.text();"
-        "document.getElementById('status').textContent='POST status: '+r.status+' body: '+t;"
-        "}"
-        "function sendTest(){postUpdate({ClockMode:1}); setTimeout(loadDebug,500);}"
-        "function sendScroll(){postUpdate({ScrollingMode:1}); setTimeout(loadDebug,500);}"
-        "async function loadDebug(){"
-        "const r=await fetch('/getdebug');"
-        "const j=await r.json();"
-        "document.getElementById('out').textContent=JSON.stringify(j,null,2);"
-        "}"
-        "loadDebug();"
-        "</script>"
-        "</body></html>";
-    server.send(200, "text/html", page);
-  });
-
   server.on("/getdebug", []() {
     char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     char monthsOfTheYear[12][12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+    #if HAS_DHT
+      int humidTemp = dht.readHumidity();        // read humidity
+      float sensorTemp = dht.readTemperature();     // read temperature
+      float saturationVaporPressure = 6.1078 * pow(10, (7.5 * sensorTemp / (237.3 + sensorTemp)));  // Calculate saturation vapor pressure
+      float vaporPressure = saturationVaporPressure * (humidTemp / 100.0);  // Calculate vapor pressure
+      float absoluteHumidity = 217 * vaporPressure / (273.15 + sensorTemp);  // Calculate absolute humidity
+      float humidityRatio = 0.622 * vaporPressure / (101325 - vaporPressure);
+      float heatIndex = -8.784695 + 1.61139411 * sensorTemp + 2.338549 * humidTemp + -0.14611605 * sensorTemp * humidTemp + -0.01230809 * pow(sensorTemp, 2) + -0.01642482 * pow(humidTemp, 2) + 0.00221173 * pow(sensorTemp, 2) * humidTemp + 0.00072546 * sensorTemp * pow(humidTemp, 2) + -0.00000358 * pow(sensorTemp, 2) * pow(humidTemp, 2);
+      heatIndex += altitudeLocal * 0.0065;  // Adjust heat index based on altitude
+    #endif
     char tempRTC[64]="";
     char tempRTCE[64]="";
     String output;
     DynamicJsonDocument json(11000);
 
     json["softwareVersion"] = softwareVersion;
+    json["HAS_RTC"] = HAS_RTC;
+    json["HAS_DHT"] = HAS_DHT;
+    json["HAS_SOUNDDETECTOR"] = HAS_SOUNDDETECTOR;
+    json["HAS_BUZZER"] = HAS_BUZZER;
+    json["HAS_PHOTOSENSOR"] = HAS_PHOTOSENSOR;
+    json["HAS_ONLINEWEATHER"] = HAS_ONLINEWEATHER;
+    json["HAS_USWEATHER"] = HAS_USWEATHER;
+    #if HAS_SOUNDDETECTOR
+      json["ANALYZER_SIZE"] = ANALYZER_SIZE;
+    #endif	
+    #if HAS_BUZZER
+      json["BUZZER_PIN"] = BUZZER_PIN;
+    #endif
     json["ClockColorSettings"] = ClockColorSettings;
     json["COLOR_ORDER"] = STRINGIFY(COLOR_ORDER);
     json["ColorChangeFrequency"] = ColorChangeFrequency;
     json["CountUpMillis"] = CountUpMillis;
     json["DateColorSettings"] = DateColorSettings;
+    #if HAS_DHT
+      json["DHT_PIN"] = DHT_PIN;
+      json["DHT11 C Temp"] = sensorTemp;
+      json["DHT11 F Temp"] = (sensorTemp * 1.8000) + 32;
+      json["DHT11 Humidity (Relative)"] = humidTemp;
+      json["DHT11 Humidity (Absolute)"] = absoluteHumidity;
+      json["DHT11 Humidity (Ratio)"] = humidityRatio;
+      json["DHT11 (Heat Index F)"] = (heatIndex * 1.8000) + 32;
+      json["DHTTYPE"] = STRINGIFY(DHTTYPE);
+    #endif
+    #if HAS_RTC
+      DateTime now = rtc.now(); 
+      sprintf(tempRTC, "%s, ", daysOfTheWeek[now.dayOfTheWeek()]);
+      sprintf(tempRTC + strlen(tempRTC), "%s ", monthsOfTheYear[now.month()-1]);
+      sprintf(tempRTC + strlen(tempRTC), "%02d ", now.day());
+      sprintf(tempRTC + strlen(tempRTC), "%d ", now.year());
+      sprintf(tempRTC + strlen(tempRTC), "%02d:", now.hour());
+      sprintf(tempRTC + strlen(tempRTC), "%02d:", now.minute());
+      sprintf(tempRTC + strlen(tempRTC), "%02d", now.second());
+      json["DS-3231"] = tempRTC; //DS3231 RTC 
+    #endif
     json["DSTime"] = DSTime;
     sprintf(tempRTCE, "%s, ", daysOfTheWeek[timeinfo.tm_wday]);
     sprintf(tempRTCE + strlen(tempRTCE), "%s ", monthsOfTheYear[timeinfo.tm_mon]);
@@ -3441,8 +5631,35 @@ void loadWebPageHandlers() {
     json["MILLI_AMPS"] = MILLI_AMPS;
     json["NUMBER_OF_DIGITS"] = NUMBER_OF_DIGITS;
     json["NUM_LEDS"] = NUM_LEDS;
+    #if HAS_PHOTOSENSOR
+      json["PHOTO_SAMPLES"] = PHOTO_SAMPLES;
+      json["PHOTO_SIZE"] = PHOTO_SIZE;
+      json["PHOTORESISTER_PIN"] = PHOTORESISTER_PIN;
+    #endif
     json["SEGMENTS_LEDS"] = SEGMENTS_LEDS;
     json["SEGMENTS_PER_NUMBER"] = SEGMENTS_PER_NUMBER;
+    #if HAS_SOUNDDETECTOR
+      json["SOUNDDETECTOR_Amplitude"] = SOUNDDETECTOR_Amplitude;
+      json["SOUNDDETECTOR_BANDS_HEIGHT"] = SOUNDDETECTOR_BANDS_HEIGHT;
+      json["SOUNDDETECTOR_BANDS_WIDTH"] = SOUNDDETECTOR_BANDS_WIDTH;
+      json["SOUNDDETECTOR_BITS_PER_SAMPLE"] = SOUNDDETECTOR_BITS_PER_SAMPLE;
+      json["SOUNDDETECTOR_I2S_PORT"] = SOUNDDETECTOR_I2S_PORT;
+      json["SOUNDDETECTOR_I2S_SCK"] = SOUNDDETECTOR_I2S_SCK;
+      json["SOUNDDETECTOR_I2S_SD"] = SOUNDDETECTOR_I2S_SD;
+      json["SOUNDDETECTOR_I2S_WS"] = SOUNDDETECTOR_I2S_WS;
+      json["SOUNDDETECTOR_SAMPLES"] = SOUNDDETECTOR_SAMPLES;
+      json["SOUNDDETECTOR_SAMPLING_FREQ"] = SOUNDDETECTOR_SAMPLING_FREQ;
+      json["SOUNDDETECTOR_averageAudioInput"] = SOUNDDETECTOR_averageAudioInput;
+      JsonArray SOUNDDETECTOR_bandValuesArray = json.createNestedArray("SOUNDDETECTOR_bandValues");
+      for (int i = 0; i < SOUNDDETECTOR_BANDS_WIDTH; i++) { SOUNDDETECTOR_bandValuesArray.add(SOUNDDETECTOR_bandValues[i]); }
+      json["SOUNDDETECTOR_decay"] = SOUNDDETECTOR_decay;
+      json["SOUNDDETECTOR_decay_check"] = SOUNDDETECTOR_decay_check;
+      json["SOUNDDETECTOR_post_react"] = SOUNDDETECTOR_post_react;
+      json["SOUNDDETECTOR_pre_react"] = SOUNDDETECTOR_pre_react;
+      JsonArray SOUNDDETECTOR_noiseThresholdsArray = json.createNestedArray("SOUNDDETECTOR_noiseThresholds");
+      for (int i = 0; i < SOUNDDETECTOR_BANDS_WIDTH; i++) { SOUNDDETECTOR_noiseThresholdsArray.add(SOUNDDETECTOR_noiseThresholds[i]); }
+      json["SOUNDDETECTOR_react"] = SOUNDDETECTOR_react;
+    #endif
     json["SPECTRUM_PIXELS"] = SPECTRUM_PIXELS;
     json["SPOT_LEDS"] = SPOT_LEDS;
     json["USE_LITTLEFS"] = USE_LITTLEFS;
@@ -3454,12 +5671,17 @@ void loadWebPageHandlers() {
     json["WiFi_retryCount"] = WiFi_retryCount;
     json["WiFi_startTime"] = WiFi_startTime;
     json["WiFi_totalReconnections"] = WiFi_totalReconnections;
-    json["lastUpdateAt"] = lastUpdateAt;
-    json["lastUpdateBody"] = lastUpdateBody;
-    json["mqtt_connected"] = haMqtt.isConnected();
-    json["mqtt_tcp_connected"] = mqttWiFiClient.connected();
+    #if HAS_DHT
+      json["altitudeLocal"] = altitudeLocal;
+    #endif
+    #if HAS_PHOTOSENSOR
+      json["analogRead(PHOTORESISTER_PIN)"] = analogRead(PHOTORESISTER_PIN);
+    #endif
     json["breakOutSet"] = breakOutSet;
     json["brightness"] = brightness;
+    #if HAS_SOUNDDETECTOR
+      json["buttonPushCounter"] = buttonPushCounter;
+    #endif	
     json["clearOldLeds"] = clearOldLeds;
     json["clockDisplayType"] = clockDisplayType;
     json["clockMode"] = clockMode;
@@ -3468,18 +5690,32 @@ void loadWebPageHandlers() {
     json["colorWheelPositionTwo"] = colorWheelPositionTwo;
     json["colorWheelSpeed"] = colorWheelSpeed;
     json["colorchangeCD"] = colorchangeCD;
+    #if HAS_SOUNDDETECTOR
+      json["colorTimer"] = colorTimer;
+    #endif	
     json["countdownMilliSeconds"] = countdownMilliSeconds;
     json["countupMilliSeconds"] = countupMilliSeconds;
     json["currentMode"] = currentMode;
     json["currentReal"] = currentReal;
     json["cylonPosition"] = cylonPosition;
+    #if HAS_USWEATHER
+      json["dailyPollSuccess"] = dailyPollSuccess;
+      json["dailyPollFailed"] = dailyPollFailed;
+      #endif
     json["dateDisplayType"] = dateDisplayType;
     json["daylightOffset_sec"] = daylightOffset_sec;
     json["daysUptime"] = daysUptime;
+    #if HAS_BUZZER
+      json["defaultAudibleAlarm"] = listOfSong[defaultAudibleAlarm];
+    #endif
     json["dotsOn"] = dotsOn;
     json["endCountDownMillis"] = endCountDownMillis;
     json["fakeclockrunning"] = fakeclockrunning;
     json["fakeTime"] = fakeTime;
+    #if HAS_BUZZER
+      JsonArray filesArrayJson = json.createNestedArray("filesArray");
+      for (int i = 0; i < 64; i++) { filesArrayJson.add(filesArray[i]); }
+    #endif	
     json["foodSpot"] = foodSpot;
     json["getSlower"] = getSlower;
     json["gmtOffset_sec"] = gmtOffset_sec;
@@ -3487,13 +5723,47 @@ void loadWebPageHandlers() {
     for (int i = 0; i < SPECTRUM_PIXELS; i++) { greenMatrixArray.add(greenMatrix[i]); }
     json["host"] = host;
     json["hoursUptime"] = hoursUptime;
+    #if HAS_ONLINEWEATHER || HAS_DHT || HAS_USWEATHER
+      json["humiColorSettings"] = humiColorSettings;
+      json["humiDisplayType"] = humiDisplayType;
+    #endif
     json["isAsleep"] = isAsleep;
+    #if HAS_PHOTOSENSOR
+      json["lightSensorValue"] = lightSensorValue;
+    #endif
     json["lightshowMode"] = lightshowMode;
     json["lightshowSpeed"] = lightshowSpeed;
     json["millis"] = millis();
   	json["minutesUptime"] = minutesUptime;
     json["ntpServer"] = ntpServer;
+    #if HAS_SOUNDDETECTOR
+      JsonArray oldBarHeightsArray = json.createNestedArray("oldBarHeights");
+      for (unsigned int i = 0; i < sizeof(oldBarHeights) / sizeof(oldBarHeights[0]); i++) { oldBarHeightsArray.add(oldBarHeights[i]); }
+    #endif	
+    #if HAS_USWEATHER
+      JsonArray tideHeightArray = json.createNestedArray("tideHeight");
+      for (int i = 0; i < 48; i++) { tideHeightArray.add(String(tideHeight[i], 1)); }
+      JsonArray tideColorArray = json.createNestedArray("tideColor");
+      for (int i = 0; i < 14; i++) {
+        char hexColor[7];  // 6 digits + null terminator
+        sprintf(hexColor, "%06X", tideColor[i]);
+        tideColorArray.add(hexColor);
+      }
+      json["noaaTemp"] = noaaTemp;
+      json["noaaHumidity"] = noaaHumidity;
+      JsonArray rainForecastArray = json.createNestedArray("rainForecast");
+      for (int i = 0; i < 14; i++) { rainForecastArray.add(rainForecast[i]); }
+      #endif
+    #if HAS_ONLINEWEATHER || HAS_USWEATHER
+      json["outdoorTemp"] = outdoorTemp;
+      json["outdoorHumidity"] = outdoorHumidity;
+      json["humidity_outdoor_enable"] = humidity_outdoor_enable;
+      #endif
     json["pastelColors"] = pastelColors;
+    #if HAS_PHOTOSENSOR
+      JsonArray photoresisterReadingsArray = json.createNestedArray("photoresisterReadings");
+      for (int i = 0; i < PHOTO_SAMPLES; i++) { photoresisterReadingsArray.add(String(photoresisterReadings[i])); }   
+    #endif
     json["prevTime"] = prevTime;
     json["prevTime2"] = prevTime2;
     json["previousTimeDay"] = previousTimeDay;
@@ -3507,8 +5777,17 @@ void loadWebPageHandlers() {
     json["randomHourPassed"] = randomHourPassed;
     json["randomMinPassed"] = randomMinPassed;
     json["randomMonthPassed"] = randomMonthPassed;
+    #if HAS_SOUNDDETECTOR
+      json["randomSpectrumMode"] = randomSpectrumMode;
+    #endif
     json["randomWeekPassed"] = randomWeekPassed;
+    #if HAS_PHOTOSENSOR
+      json["readIndex"] = readIndex;
+    #endif
     json["realtimeMode"] = realtimeMode;
+    #if HAS_SOUNDDETECTOR
+      json["sampling_period_us"] = sampling_period_us; 
+    #endif	
     json["scoreboardLeft"] = scoreboardLeft;
     json["scoreboardRight"] = scoreboardRight;
     json["scrollColorSettings"] = scrollColorSettings;
@@ -3517,8 +5796,11 @@ void loadWebPageHandlers() {
     json["scrollOptions2"] = scrollOptions2;
     json["scrollOptions3"] = scrollOptions3;
     json["scrollOptions4"] = scrollOptions4;
+    json["scrollOptions5"] = scrollOptions5;
+    json["scrollOptions6"] = scrollOptions6;
     json["scrollOptions7"] = scrollOptions7;
     json["scrollOptions8"] = scrollOptions8;
+    json["scrollOptions9"] = scrollOptions9;
     json["scrollOverride"] = scrollOverride;
     json["scrollText"] = scrollText.c_str();
     json["firstRun"] = firstRun;
@@ -3526,19 +5808,75 @@ void loadWebPageHandlers() {
     json["snakeLastDirection"] = snakeLastDirection;
     json["snakePosition"] = snakePosition;
     json["snakeWaiting"] = snakeWaiting;
+    #if HAS_BUZZER
+      json["songTaskbuffer"] = songTaskbuffer;
+      json["songTaskbufferSize"] = songTaskbufferSize;
+      JsonArray songsArrayJson = json.createNestedArray("songsArray");
+      for (int i = 0; i < 64; i++) { songsArrayJson.add(songsArray[i]); }
+    #endif	
+    #if HAS_BUZZER
+      json["specialAudibleAlarm"] = listOfSong[specialAudibleAlarm];
+    #endif
+    #if HAS_SOUNDDETECTOR
+      json["spectrumBackgroundSettings"] = spectrumBackgroundSettings;
+      json["spectrumColorSettings"] = spectrumColorSettings;
+      json["spectrumMode"] = spectrumMode;
+    #endif
     json["spotlightsColorSettings"] = spotlightsColorSettings;
+    #if HAS_USWEATHER
+      json["stationID"] = stationID; 
+      #endif
     json["suspendFrequency"] = suspendFrequency;
     json["suspendType"] = suspendType;
+    #if HAS_ONLINEWEATHER || HAS_DHT
+      json["tempColorSettings"] = tempColorSettings;
+      json["tempDisplayType"] = tempDisplayType;
+      json["temperatureCorrection"] = temperatureCorrection;
+      json["temperatureSymbol"] = temperatureSymbol;
+    #endif
+    #if HAS_USWEATHER
+      json["textTides"] = textTides;
+      #endif
+    #if HAS_BUZZER
+      json["totalSongs"] = totalSongs;
+    #endif	
     json["updateSettingsRequired"] = updateSettingsRequired;
+    #if HAS_BUZZER
+      json["useAudibleAlarm"] = useAudibleAlarm;
+    #endif
     json["useSpotlights"] = useSpotlights;
+    #if HAS_BUZZER
+      JsonArray validDurations = json.createNestedArray("valid_durations");
+      for (unsigned int i = 0; i < sizeof(valid_durations) / sizeof(valid_durations[0]); i++) { validDurations.add(valid_durations[i]); }
+      JsonArray validOctaves = json.createNestedArray("valid_octaves");
+      for (unsigned int i = 0; i < sizeof(valid_octaves) / sizeof(valid_octaves[0]); i++) { validOctaves.add(valid_octaves[i]); }
+      JsonArray validBeats = json.createNestedArray("valid_beats");
+      for (unsigned int i = 0; i < sizeof(valid_beats) / sizeof(valid_beats[0]); i++) { validBeats.add(valid_beats[i]); }
+    #endif	
+    #if HAS_ONLINEWEATHER
+      json["apikey"] = apikey;
+    #endif	
+    #if HAS_ONLINEWEATHER || HAS_USWEATHER
+      json["latitude"] = latitude;
+      json["longitude"] = longitude;
+      json["temperature_outdoor_enable"] = temperature_outdoor_enable;
+    #endif	
       json["countdownColorValue"] = countdownColorValue;
+      json["spectrumColorValue"] = spectrumColorValue;
+      json["spectrumBackgroundColorValue"] = spectrumBackgroundColorValue;
       json["hourColorValue"] = hourColorValue;
       json["colonColorValue"] = colonColorValue;
       json["minColorValue"] = minColorValue;
       json["spotlightsColorValue"] = spotlightsColorValue;
       json["scrollColorValue"] = scrollColorValue;
+      json["humiColorValue"] = humiColorValue;
+      json["humiSymbolColorValue"] = humiSymbolColorValue;
+      json["humiDecimalColorValue"] = humiDecimalColorValue;
       json["scoreboardColorLeftValue"] = scoreboardColorLeftValue;
       json["scoreboardColorRightValue"] = scoreboardColorRightValue;
+      json["tempColorValue"] = tempColorValue;
+      json["typeColorValue"] = typeColorValue;
+      json["degreeColorValue"] = degreeColorValue;
       json["dayColorValue"] = dayColorValue;
       json["monthColorValue"] = monthColorValue;  
       json["separatorColorValue"] = separatorColorValue;
@@ -3574,141 +5912,90 @@ void loadWebPageHandlers() {
       }
   });
 
-  server.on("/updatefs", HTTP_GET, []() {
-    const char* page =
-        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Shelf Clock - Update Filesystem</title></head><body>"
-        "<h3>Update Filesystem (LittleFS)</h3>"
-        "<form method='POST' action='/updatefs' enctype='multipart/form-data'>"
-        "<input type='file' name='update'>"
-        "<input type='submit' value='Upload'>"
-        "</form>"
-        "<p>Use the Filesystem image (.bin from PlatformIO Upload Filesystem).</p>"
-        "</body></html>";
-    server.send(200, "text/html", page);
-  });
 
-  server.on("/updatefs", HTTP_POST, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-    ESP.restart();
-  }, []() {
-      HTTPUpload& upload = server.upload();
-      if (upload.status == UPLOAD_FILE_START) {
-        Serial.printf("UpdateFS: %s\n", upload.filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
-          Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_WRITE) {
-        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-          Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_END) {
-        if (Update.end(true)) {
-          Serial.printf("UpdateFS Success: %u\nRebooting...\n", upload.totalSize);
+
+#if HAS_BUZZER
+  /*handling uploading song file */
+server.on("/uploadSong", HTTP_POST, []() {
+    // Send response after upload finished, based on status set in upload handler
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    if (lastSongUploadOk) {
+      DynamicJsonDocument doc(128);
+      doc["error"] = 0;
+      doc["message"] = lastSongUploadMessage.length() ? lastSongUploadMessage : "Upload Complete";
+      String out;
+      serializeJson(doc, out);
+      server.send(200, "application/json", out);
+    } else {
+      DynamicJsonDocument doc(128);
+      doc["error"] = 1;
+      doc["message"] = lastSongUploadMessage.length() ? lastSongUploadMessage : "Upload failed";
+      String out;
+      serializeJson(doc, out);
+      server.send(500, "application/json", out);
+    }
+}, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        lastSongUploadOk = false;
+        lastSongUploadMessage = "";
+        const char* filename = upload.filename.c_str();
+        char fullFilename[256];
+        if (filename[0] != '/') {
+            snprintf(fullFilename, sizeof(fullFilename), "/songs/%s", filename);
         } else {
-          Update.printError(Serial);
+            strncpy(fullFilename, filename, sizeof(fullFilename));
         }
-      }
-  });
-
-  // MQTT Settings Handlers
-  server.on("/getMQTTSettings", []() {
-    String mqttServerStored = prefGetStr("mqttServer", "");
-    int mqttPortStored = prefGetInt("mqttPort", 1883);
-    String mqttUserStored = prefGetStr("mqttUser", "");
-    String mqttPasswordStored = prefGetStr("mqttPassword", "");
-
-    String response = mqttServerStored + "," + String(mqttPortStored) + "," +
-                      mqttUserStored + "," + mqttPasswordStored;
-    server.send(200, "text/plain", response);
-  });
-
-  server.on("/setMQTTSettings", HTTP_POST, []() {
-    if (server.hasArg("mqttServer")) {
-      String newServer = server.arg("mqttServer");
-      String newPort = server.arg("mqttPort");
-      String newUser = server.arg("mqttUser");
-      String newPassword = server.arg("mqttPassword");
-
-      prefPutStr("mqttServer", newServer);
-      prefPutInt("mqttPort", newPort.toInt());
-      prefPutStr("mqttUser", newUser);
-      prefPutStr("mqttPassword", newPassword);
-
-      Serial.println("MQTT settings saved to Preferences");
-      Serial.print("Server: "); Serial.println(newServer);
-      Serial.print("Port: "); Serial.println(newPort);
-      Serial.print("User: "); Serial.println(newUser);
-
-      // Reload MQTT settings and reconnect
-      setupMQTT();
-      if (mqttServer.length() > 0) {
-        haMqtt.begin(mqttServer.c_str(), mqttPort, mqttUser.c_str(), mqttPassword.c_str());
-      }
-
-      server.send(200, "text/plain", "Settings saved. Reconnecting MQTT...");
-    } else {
-      server.send(400, "text/plain", "Missing parameters");
+        Serial.print("Upload Name: ");
+        Serial.println(fullFilename);
+        fsUploadFile = FileFS.open(fullFilename, "w");
+        if (!fsUploadFile) {
+            Serial.println("Failed to open file for writing");
+            lastSongUploadOk = false;
+            lastSongUploadMessage = "Failed to open file";
+        } else {
+            Serial.println("Upload started");
+        }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        Serial.print(".");
+        if (fsUploadFile) {
+            fsUploadFile.write(upload.buf, upload.currentSize);
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        Serial.println("");
+        if (fsUploadFile) {
+            fsUploadFile.close();
+            Serial.print("Upload Size: ");
+            Serial.println(upload.totalSize);
+            getListOfSongs();
+            lastSongUploadOk = true;
+            lastSongUploadMessage = "Upload Complete";
+        } else {
+            lastSongUploadOk = false;
+            lastSongUploadMessage = "Upload failed";
+        }
     }
-  });
+});
 
-  server.on("/testMQTT", []() {
-    DynamicJsonDocument json(256);
-    json["connected"] = mqttConnected || haMqtt.isConnected();
-    json["server"] = mqttServer;
-    json["port"] = mqttPort;
 
-    String output;
-    serializeJson(json, output);
-    server.send(200, "application/json", output);
-  });
-
-  // Web Debug Log Handler
-  server.on("/debuglog", []() {
-    String html = "<!DOCTYPE html><html><head>"
-                  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                  "<title>Debug Log</title>"
-                  "<style>body{font-family:monospace;padding:10px;background:#000;color:#0f0;}"
-                  "pre{white-space:pre-wrap;word-wrap:break-word;font-size:12px;}"
-                  ".refresh{position:fixed;top:10px;right:10px;padding:10px;background:#333;color:#fff;"
-                  "border:none;cursor:pointer;border-radius:5px;}</style>"
-                  "<script>function refresh(){location.reload();}"
-                  "setInterval(refresh,5000);</script></head><body>"
-                  "<button class='refresh' onclick='refresh()'>Refresh</button>"
-                  "<h2>ShelfClock Debug Log</h2><pre>";
-
-    // Read log in chronological order
-    for (int i = 0; i < DEBUG_LOG_SIZE; i++) {
-      int idx = (debugLogIndex + i) % DEBUG_LOG_SIZE;
-      if (debugLog[idx].length() > 0) {
-        html += debugLog[idx] + "\n";
+  server.on("/deleteSong", HTTP_POST, []() {
+    DynamicJsonDocument json(1500);
+      Serial.print("Upload Size: "); Serial.println(server.args());
+    if(server.args() > 0) {
+      String body = server.arg(0);
+      Serial.println("----");
+      Serial.println(body);
+      Serial.println("----");
+      deserializeJson(json, server.arg(0));
+      if (!json["song"].isNull()) {
+      Serial.print("Upload Size: "); Serial.println(json["song"].as<String>());
+      deleteFile(FileFS, listOfSong[json["song"].as<String>()]);
+      getListOfSongs();
       }
-    }
-
-    html += "</pre></body></html>";
-    server.send(200, "text/html", html);
+      server.send(200, "text/json", "{\"result\":\"ok\"}");
+    } 
+    server.send(401);
   });
-
-  // Format LittleFS Handler
-  server.on("/formatfs", []() {
-    webLog("Format LittleFS requested via web interface");
-    String html = "<!DOCTYPE html><html><head>"
-                  "<meta http-equiv='refresh' content='15;url=/settings.html'>"
-                  "<title>Formatting...</title></head><body>"
-                  "<h2>Formatting LittleFS...</h2>"
-                  "<p>Please wait, ESP32 will restart...</p></body></html>";
-    server.send(200, "text/html", html);
-    delay(1000);
-
-    FileFS.end();
-    if (FileFS.format()) {
-      webLog("LittleFS formatted successfully");
-    } else {
-      webLog("LittleFS format failed");
-    }
-    delay(1000);
-    ESP.restart();
-  });
+#endif
 
 }
