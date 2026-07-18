@@ -1,4 +1,7 @@
 #include "../include/ha_integration.h"
+#include "../include/display_modes.h"
+#include "../include/settings_manager.h"
+#include "../include/party_games.h"
 #include <ArduinoHA.h>
 #include <FastLED.h>
 #include <time.h>
@@ -59,6 +62,10 @@ HANumber haScoreboardRight("sc_score_right");
 HAButton haCountdownStart("sc_countdown_start");
 HAButton haStopwatchStart("sc_stopwatch_start");
 HAButton haScoreboardApply("sc_score_apply");
+HANumber haDisplayNumber("sc_display_number");
+HASwitch haDisplayDegreeSwitch("sc_display_degree");
+HASelect haPartyGame("sc_party_game");
+HAButton haPartyStart("sc_party_start");
 
 
 static unsigned long lastHaSyncMs = 0;
@@ -82,16 +89,21 @@ static int modeToIndex(byte mode) {
         case 3:  return 2; // Scoreboard
         case 4:  return 3; // Stopwatch
         case 5:  return 4; // Lightshow
-        case 6:  return 5; // Rainbows
-        case 7:  return 6; // Date
-        case 10: return 7; // Display Off
-        case 11: return 8; // Scroll
+        case 7:  return 5; // Date
+        case 10: return 6; // Display Off
+        case 11: return 7; // Scroll
+        case 8:  return 8; // HA Display
+        case 2:  return 9; // Party Games
         default: return 0;
     }
 }
 
 static void markSettingsChanged() {
     updateSettingsRequired = 1;
+    haDirty = true;
+}
+
+void haMarkDirty() {
     haDirty = true;
 }
 
@@ -151,18 +163,22 @@ void onModeCommand(int8_t index, HASelect* sender) {
             realtimeMode = 1;
             markSettingsChanged();
             break;
-        case 5: // Rainbows
-            applyClockMode(6);
-            break;
-        case 6: // Date
+        case 5: // Date
             applyClockMode(7);
             break;
-        case 7: // Display Off
+        case 6: // Display Off
             applyClockMode(10);
             breakOutSet = 1;
             break;
-        case 8: // Scroll
+        case 7: // Scroll
             applyClockMode(11);
+            break;
+        case 8: // HA Display
+            applyClockMode(8);
+            break;
+        case 9: // Party Games
+            applyClockMode(2);
+            startPartyGame();
             break;
         default:
             return;
@@ -408,6 +424,32 @@ void onScoreboardApply(HAButton* sender) {
     applyScoreboard();
 }
 
+void onDisplayNumberCommand(HANumeric value, HANumber* sender) {
+    haDisplayValue = value.toFloat();
+    allBlank();
+    clockMode = 8;
+    realtimeMode = 0;
+    markSettingsChanged();
+    sender->setState(value);
+}
+
+void onDisplayDegreeCommand(bool state, HASwitch* sender) {
+    haDisplayDegree = state;
+    markSettingsChanged();
+    sender->setState(state);
+}
+
+
+void onPartyGameCommand(int8_t index, HASelect* sender) {
+    partyGameType = index;
+    markSettingsChanged();
+    sender->setState(index);
+}
+
+void onPartyStartCommand(HAButton* sender) {
+    applyClockMode(2);
+    startPartyGame();
+}
 
 void setDisplayMode(String mode) {
     if (mode == "clock") {
@@ -450,124 +492,124 @@ void setupHA() {
     device.setModel("ESP32 LED Clock");
     device.setSoftwareVersion("0.98");
 
-    haMode.setOptions("Clock;Countdown;Scoreboard;Stopwatch;Lightshow;Rainbows;Date;Display Off;Scroll");
-    haMode.setName("01 Mode");
+    haMode.setOptions("Clock;Countdown;Scoreboard;Stopwatch;Lightshow;Date;Display Off;Scroll;HA Display;Party Games");
+    haMode.setName("Mode");
     haMode.onCommand(onModeCommand);
     haMqtt.addDeviceType(&haMode);
 
-    haLightShowMode.setOptions("Chase;Twinkles;Rainbow;Matrix;Rain;Fire;Snake;Cylon");
-    haLightShowMode.setName("02 Lightshow Mode");
+    haLightShowMode.setOptions("Chase;Twinkles;Rainbow;Matrix;Rain;Fire;Snake;Cylon;Breathing;Sparkle;Meteor;ColorWipe;Plasma;Random;Confetti;Juggle;Heartbeat;PixelRainbow;PixelWave;PixelFireworks;PixelLights;PixelTheater");
+    haLightShowMode.setName("Lightshow: Effect");
     haLightShowMode.onCommand(onLightShowCommand);
     haMqtt.addDeviceType(&haLightShowMode);
 
     haPalette.setOptions("Major;Pastel");
-    haPalette.setName("10 Color Palette");
+    haPalette.setName("Display: Color Palette");
     haPalette.onCommand(onPaletteCommand);
     haMqtt.addDeviceType(&haPalette);
 
     haColorChangeFreq.setOptions("Every Second;Every Minute;Every Hour;Every Day;Every Week;Every Month");
-    haColorChangeFreq.setName("10 Color Change Freq");
+    haColorChangeFreq.setName("Display: Color Change Frequency");
     haColorChangeFreq.onCommand(onColorChangeFreqCommand);
     haMqtt.addDeviceType(&haColorChangeFreq);
 
     haSuspendType.setOptions("Disabled;Digits Only;All Lights");
-    haSuspendType.setName("09 Suspend Type");
+    haSuspendType.setName("Display: Suspend Type");
     haSuspendType.onCommand(onSuspendTypeCommand);
     haMqtt.addDeviceType(&haSuspendType);
 
     haSuspendFreq.setOptions("1;5;10;15;30;45;60");
-    haSuspendFreq.setName("09 Suspend Minutes");
+    haSuspendFreq.setName("Display: Suspend Minutes");
     haSuspendFreq.onCommand(onSuspendFreqCommand);
     haMqtt.addDeviceType(&haSuspendFreq);
 
     haClockDisplay.setOptions("Center 3-Digit;24h Military;12h Space-Padded;Blinking Center;New Years");
-    haClockDisplay.setName("11 Clock Display");
+    haClockDisplay.setName("Clock: Display Type");
     haClockDisplay.onCommand(onClockDisplayCommand);
     haMqtt.addDeviceType(&haClockDisplay);
 
     haColonType.setOptions("Colon;Bar;Period");
-    haColonType.setName("11 Colon Type");
+    haColonType.setName("Clock: Colon Type");
     haColonType.onCommand(onColonTypeCommand);
     haMqtt.addDeviceType(&haColonType);
 
-    haGmtOffset.setName("11 UTC Offset");
+    haGmtOffset.setName("Clock: UTC Offset");
     haGmtOffset.setMin(-43200);
     haGmtOffset.setMax(50400);
     haGmtOffset.setStep(900);
     haGmtOffset.onCommand(onGmtOffsetCommand);
     haMqtt.addDeviceType(&haGmtOffset);
 
-    haDST.setName("11 Daylight Savings");
+    haDST.setName("Clock: Daylight Savings");
     haDST.onCommand(onDSTCommand);
     haMqtt.addDeviceType(&haDST);
 
     haClockColorSettings.setOptions("Separate Colors;Hour = Minutes;Random Each;Same Random;Random Every Second");
-    haClockColorSettings.setName("11 Clock Color Mode");
+    haClockColorSettings.setName("Clock: Color Mode");
     haClockColorSettings.onCommand(onClockColorSettingsCommand);
     haMqtt.addDeviceType(&haClockColorSettings);
 
     haDateDisplay.setOptions("Zero-Padded;Space-Padded;Center 3-Digit;Day of Week;Numeric Day;Separator;Year");
-    haDateDisplay.setName("12 Date Display");
+    haDateDisplay.setName("Date: Display Type");
     haDateDisplay.onCommand(onDateDisplayCommand);
     haMqtt.addDeviceType(&haDateDisplay);
 
     haDateColorSettings.setOptions("Separate Colors;Month = Day;Random Each;Same Random;Random Every Second");
-    haDateColorSettings.setName("12 Date Color Mode");
+    haDateColorSettings.setName("Date: Color Mode");
     haDateColorSettings.onCommand(onDateColorSettingsCommand);
     haMqtt.addDeviceType(&haDateColorSettings);
 
     haScrollFrequency.setOptions("Every Minute;Every 5 Minutes;Every 10 Minutes;Every 15 Minutes;Every 30 Minutes;Every Hour");
-    haScrollFrequency.setName("16 Scroll Frequency");
+    haScrollFrequency.setName("Scroll: Frequency");
     haScrollFrequency.onCommand(onScrollFrequencyCommand);
     haMqtt.addDeviceType(&haScrollFrequency);
 
-    haScrollOpt1.setName("16 Scroll: Military Time");
+    haScrollOpt1.setName("Scroll: Show Military Time");
     haScrollOpt1.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt1);
 
-    haScrollOpt2.setName("16 Scroll: Day of Week");
+    haScrollOpt2.setName("Scroll: Show Day of Week");
     haScrollOpt2.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt2);
 
-    haScrollOpt3.setName("16 Scroll: Date");
+    haScrollOpt3.setName("Scroll: Show Date");
     haScrollOpt3.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt3);
 
-    haScrollOpt4.setName("16 Scroll: Year");
+    haScrollOpt4.setName("Scroll: Show Year");
     haScrollOpt4.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt4);
 
-    haScrollOpt7.setName("16 Scroll: Text");
+    haScrollOpt7.setName("Scroll: Show Text");
     haScrollOpt7.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt7);
 
-    haScrollOpt8.setName("16 Scroll: IP Address");
+    haScrollOpt8.setName("Scroll: Show IP Address");
     haScrollOpt8.onCommand(onScrollOptCommand);
     haMqtt.addDeviceType(&haScrollOpt8);
 
     haScrollColorSettings.setOptions("Selected Color;Same Random");
-    haScrollColorSettings.setName("16 Scroll Color Mode");
+    haScrollColorSettings.setName("Scroll: Color Mode");
     haScrollColorSettings.onCommand(onScrollColorSettingsCommand);
     haMqtt.addDeviceType(&haScrollColorSettings);
 
-    haScrollOverride.setName("16 Scroll Override");
+    haScrollOverride.setName("Scroll: Override");
     haScrollOverride.onCommand(onScrollOverrideCommand);
     haMqtt.addDeviceType(&haScrollOverride);
 
-    haUseSpotlights.setName("08 Spotlights Enable");
+    haUseSpotlights.setName("Spotlights: Enable");
     haUseSpotlights.onCommand(onUseSpotlightsCommand);
     haMqtt.addDeviceType(&haUseSpotlights);
 
     haSpotlightsColorSettings.setOptions("Chosen Color;Random Color;Cycle Wheel;Cycle Slow;Twinkle Fade");
-    haSpotlightsColorSettings.setName("08 Spotlights Color Mode");
+    haSpotlightsColorSettings.setName("Spotlights: Color Mode");
     haSpotlightsColorSettings.onCommand(onSpotlightsColorSettingsCommand);
     haMqtt.addDeviceType(&haSpotlightsColorSettings);
 
-    haColorChangeCD.setName("07 Color Change Countdown");
+    haColorChangeCD.setName("Countdown: Color Change");
     haColorChangeCD.onCommand(onColorChangeCDCommand);
     haMqtt.addDeviceType(&haColorChangeCD);
 
-    haBrightness.setName("06 Brightness");
+    haBrightness.setName("Display: Brightness");
     haBrightness.setMin(10);
     haBrightness.setMax(255);
     haBrightness.setStep(1);
@@ -581,9 +623,9 @@ void setupHA() {
         &haScoreRightColor, &haScrollColor, &haSpotlightsColor
     };
     const char* colorNames[] = {
-        "20 Color Hour", "20 Color Minute", "20 Color Colon", "20 Color Day", "20 Color Month",
-        "20 Color Separator", "20 Color Countdown", "20 Color Score Left",
-        "20 Color Score Right", "20 Color Scroll", "20 Color Spotlights"
+        "Color: Hour", "Color: Minute", "Color: Colon", "Color: Day", "Color: Month",
+        "Color: Separator", "Color: Countdown", "Color: Score Left",
+        "Color: Score Right", "Color: Scroll", "Color: Spotlights"
     };
     for (size_t i = 0; i < sizeof(colorLights) / sizeof(colorLights[0]); i++) {
         colorLights[i]->setName(colorNames[i]);
@@ -593,45 +635,65 @@ void setupHA() {
         haMqtt.addDeviceType(colorLights[i]);
     }
 
-    haCountdownSeconds.setName("04 Countdown Seconds");
+    haCountdownSeconds.setName("Countdown: Seconds");
     haCountdownSeconds.setMin(1);
     haCountdownSeconds.setMax(86400);
     haCountdownSeconds.setStep(1);
     haCountdownSeconds.onCommand(onCountdownSecondsCommand);
     haMqtt.addDeviceType(&haCountdownSeconds);
 
-    haStopwatchSeconds.setName("05 Stopwatch Seconds");
+    haStopwatchSeconds.setName("Stopwatch: Seconds");
     haStopwatchSeconds.setMin(1);
     haStopwatchSeconds.setMax(86400);
     haStopwatchSeconds.setStep(1);
     haStopwatchSeconds.onCommand(onStopwatchSecondsCommand);
     haMqtt.addDeviceType(&haStopwatchSeconds);
 
-    haScoreboardLeft.setName("04 Scoreboard Left");
+    haScoreboardLeft.setName("Scoreboard: Left Score");
     haScoreboardLeft.setMin(0);
     haScoreboardLeft.setMax(99);
     haScoreboardLeft.setStep(1);
     haScoreboardLeft.onCommand(onScoreLeftCommand);
     haMqtt.addDeviceType(&haScoreboardLeft);
 
-    haScoreboardRight.setName("04 Scoreboard Right");
+    haScoreboardRight.setName("Scoreboard: Right Score");
     haScoreboardRight.setMin(0);
     haScoreboardRight.setMax(99);
     haScoreboardRight.setStep(1);
     haScoreboardRight.onCommand(onScoreRightCommand);
     haMqtt.addDeviceType(&haScoreboardRight);
 
-    haCountdownStart.setName("04 Start Countdown");
+    haCountdownStart.setName("Countdown: Start");
     haCountdownStart.onCommand(onCountdownStart);
     haMqtt.addDeviceType(&haCountdownStart);
 
-    haStopwatchStart.setName("05 Start Stopwatch");
+    haStopwatchStart.setName("Stopwatch: Start");
     haStopwatchStart.onCommand(onStopwatchStart);
     haMqtt.addDeviceType(&haStopwatchStart);
 
-    haScoreboardApply.setName("04 Apply Scoreboard");
+    haScoreboardApply.setName("Scoreboard: Apply");
     haScoreboardApply.onCommand(onScoreboardApply);
     haMqtt.addDeviceType(&haScoreboardApply);
+
+    haDisplayNumber.setName("HA Display: Number");
+    haDisplayNumber.setMin(0);
+    haDisplayNumber.setMax(9999);
+    haDisplayNumber.setStep(1.0f);
+    haDisplayNumber.onCommand(onDisplayNumberCommand);
+    haMqtt.addDeviceType(&haDisplayNumber);
+
+    haDisplayDegreeSwitch.setName("HA Display: Show Degree");
+    haDisplayDegreeSwitch.onCommand(onDisplayDegreeCommand);
+    haMqtt.addDeviceType(&haDisplayDegreeSwitch);
+
+    haPartyGame.setOptions("Dice;Roulette;Shot Timer;Higher/Lower");
+    haPartyGame.setName("Party: Game Type");
+    haPartyGame.onCommand(onPartyGameCommand);
+    haMqtt.addDeviceType(&haPartyGame);
+
+    haPartyStart.setName("Party: Start Game");
+    haPartyStart.onCommand(onPartyStartCommand);
+    haMqtt.addDeviceType(&haPartyStart);
 
 }
 
@@ -702,4 +764,7 @@ void haSyncState() {
     haStopwatchSeconds.setState((float)(pendingStopwatchMs / 1000UL));
     haScoreboardLeft.setState((float)scoreboardLeft);
     haScoreboardRight.setState((float)scoreboardRight);
+    haDisplayNumber.setState(haDisplayValue);
+    haDisplayDegreeSwitch.setState(haDisplayDegree);
+    haPartyGame.setState(partyGameType);
 }

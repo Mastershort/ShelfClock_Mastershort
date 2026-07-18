@@ -22,6 +22,7 @@
         <li><a href="./scheduler.html">Alarm Scheduler</a></li>
         <li><a href="./_ac">Setup Wifi</a></li>
         <li><a href="./update">Update Firmware</a></li>
+        <li><a href="./updatefs">Update Filesystem</a></li>
         <li><a href="./debug.html">Debug Info</a></li>
       </ul>
     </div>   
@@ -461,6 +462,47 @@
         </div>
       </div>
       
+    </section>
+    <section>
+      <h2>MQTT / Home Assistant Settings</h2>
+      <div>
+        <div>
+          <h3>MQTT Server</h3>
+          <label><input type="text" name="mqtt_server" placeholder="192.168.1.100"> IP or Hostname</label>
+        </div>
+        <div>
+          <h3>MQTT Port</h3>
+          <label><input type="number" name="mqtt_port" value="1883" min="1" max="65535"> (default: 1883)</label>
+        </div>
+        <div>
+          <h3>MQTT Username</h3>
+          <label><input type="text" name="mqtt_user" placeholder="username"></label>
+        </div>
+        <div>
+          <h3>MQTT Password</h3>
+          <label><input type="password" name="mqtt_password" placeholder="password"></label>
+        </div>
+        <div>
+          <button type="button" name="mqtt_save" class="green">Save & Connect</button>
+          <button type="button" name="mqtt_test" class="btn-grey" style="background:#555;color:#fff;border:none;padding:0.4rem 0.8rem;border-radius:4px;cursor:pointer;">Test Connection</button>
+          <span class="smaller mqtt_status"></span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="button-wrapper yellow">
+        <h3>Backup &amp; Restore Settings</h3>
+        <p style="font-size:0.85em;margin:0.3em 0;">Export all settings, MQTT config and schedules as a backup file. Import to restore on a new ESP.</p>
+        <div>
+          <input type="button" id="btnExport" value="Export Settings" style="background:#2196F3;">
+          <label style="display:inline-block;cursor:pointer;">
+            <input type="file" id="fileImport" accept=".json" style="display:none;">
+            <input type="button" id="btnImport" value="Import Settings" style="background:#FF9800;">
+          </label>
+        </div>
+        <span id="backupStatus" class="smaller" style="display:block;margin-top:0.3em;"></span>
+      </div>
     </section>
     <section>
       <div class="button-wrapper yellow">

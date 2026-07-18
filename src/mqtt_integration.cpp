@@ -15,14 +15,10 @@ String mqttClientId;
 
 void setupMQTT() {
     // Load MQTT settings from Preferences
-    // mqttServer   = prefGetStr("mqttServer", "");
-    // mqttPort     = (uint16_t)prefGetInt("mqttPort", 1883);
-    // mqttUser     = prefGetStr("mqttUser", "");
-    // mqttPassword = prefGetStr("mqttPassword", "");
-    mqttServer   = "192.168.50.11";
+    mqttServer   = prefGetStr("mqttServer", "");
     mqttPort     = (uint16_t)prefGetInt("mqttPort", 1883);
-    mqttUser     = prefGetStr("mqttUser", "mqttUser");
-    mqttPassword = prefGetStr("mqttPassword", "mqttPassword");
+    mqttUser     = prefGetStr("mqttUser", "");
+    mqttPassword = prefGetStr("mqttPassword", "");
     mqttClientId = "ShelfClock_" + String((uint32_t)ESP.getEfuseMac(), HEX);
 
     if (mqttServer.length() > 0) {

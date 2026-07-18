@@ -97,6 +97,15 @@
         body: { deleteData },
         expectJson: false
       });
+    },
+    getMQTTSettings() {
+      return request('/getMQTTSettings');
+    },
+    setMQTTSettings(body) {
+      return request('/setMQTTSettings', { method: 'POST', body });
+    },
+    testMQTT() {
+      return request('/testMQTT');
     }
   };
 

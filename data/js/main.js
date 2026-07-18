@@ -112,6 +112,19 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
 
+        document.querySelectorAll("[data-party]").forEach(element => {
+            element.addEventListener('click', async event => {
+                let body = {
+                    partyGame: event.target.dataset.party
+                }
+                try {
+                    await Api.postUpdate(body);
+                } catch (error) {
+                    console.error('Failed to start party game', error);
+                }
+            });
+        });
+
         document.querySelectorAll("[data-lightshow]").forEach(element => {
             element.addEventListener('click', async event => {
                 let body = {
@@ -157,6 +170,66 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             })
         });
+
+        const haDisplaySend = document.querySelector("input[name='haDisplaySend']");
+        if (haDisplaySend) {
+            haDisplaySend.addEventListener('click', async () => {
+                let val = parseFloat(document.querySelector("[name='haDisplayValue']").value) || 0;
+                let deg = document.querySelector("[name='haDisplayDegree']").checked;
+                try {
+                    await Api.postUpdate({ HADisplayMode: val, haDisplayDegree: deg });
+                } catch (error) {
+                    console.error('Failed to send HA display value', error);
+                }
+            });
+        }
+
+        /* Spotlights quick controls */
+        const spotToggle = document.querySelector("input[name='spotOnOff']");
+        if (spotToggle) {
+            // initialize toggle + color picker with the current state
+            Api.getSettings().then(s => {
+                if (!s) return;
+                spotToggle.checked = !!s.useSpotlights;
+                const c = document.querySelector("input[name='spotColor']");
+                if (c && typeof s.spotlightsColor === 'number') {
+                    c.value = '#' + s.spotlightsColor.toString(16).padStart(6, '0');
+                }
+            }).catch(() => {});
+
+            spotToggle.addEventListener('change', async event => {
+                try {
+                    await Api.postUpdate({ useSpotlights: event.target.checked });
+                } catch (error) {
+                    console.error('Failed to toggle spotlights', error);
+                }
+            });
+
+            const spotColor = document.querySelector("input[name='spotColor']");
+            if (spotColor) {
+                spotColor.addEventListener('change', async event => {
+                    try {
+                        // picking a color implies fixed-color mode so the change is visible
+                        await Api.postUpdate({
+                            spotlightsColorSettings: 0,
+                            spotlightsColor: parseInt(event.target.value.slice(1), 16)
+                        });
+                    } catch (error) {
+                        console.error('Failed to set spotlight color', error);
+                    }
+                });
+            }
+
+            document.querySelectorAll("[data-spotmode]").forEach(element => {
+                element.addEventListener('click', async event => {
+                    try {
+                        await Api.postUpdate({ spotlightsColorSettings: parseInt(event.target.dataset.spotmode) });
+                    } catch (error) {
+                        console.error('Failed to set spotlight mode', error);
+                    }
+                });
+            });
+        }
 
         document.querySelectorAll("input[name='upleft'], input[name='upright'], input[name='downleft'], input[name='downright']").forEach(element => {
             element.addEventListener('click', async event => {
@@ -389,6 +462,119 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
     })();
+
+    /* MQTT Settings – independent block so it runs even if loadSettings() fails */
+    (async () => {
+        const mqttStatus = document.querySelector(".mqtt_status");
+        try {
+            const mqtt = await Api.getMQTTSettings();
+            if (mqtt) {
+                ['mqtt_server', 'mqtt_port', 'mqtt_user', 'mqtt_password'].forEach(f => {
+                    const el = document.querySelector(`[name='${f}']`);
+                    if (el && mqtt[f] !== undefined && mqtt[f] !== '') el.value = mqtt[f];
+                });
+            }
+        } catch (e) {
+            console.warn('Could not load MQTT settings', e);
+        }
+
+        const saveBtn = document.querySelector("[name='mqtt_save']");
+        if (saveBtn) {
+            saveBtn.addEventListener('click', async () => {
+                if (mqttStatus) { mqttStatus.classList.remove('error'); mqttStatus.innerHTML = 'Saving...'; }
+                try {
+                    await Api.setMQTTSettings({
+                        mqtt_server: document.querySelector("[name='mqtt_server']").value,
+                        mqtt_port: parseInt(document.querySelector("[name='mqtt_port']").value) || 1883,
+                        mqtt_user: document.querySelector("[name='mqtt_user']").value,
+                        mqtt_password: document.querySelector("[name='mqtt_password']").value
+                    });
+                    if (mqttStatus) mqttStatus.innerHTML = 'Saved & reconnecting...';
+                    setTimeout(async () => {
+                        try {
+                            const test = await Api.testMQTT();
+                            if (mqttStatus) mqttStatus.innerHTML = test.connected ? 'Connected!' : 'Saved, but not connected yet';
+                        } catch (e) {
+                            if (mqttStatus) mqttStatus.innerHTML = 'Saved!';
+                        }
+                    }, 2000);
+                } catch (e) {
+                    console.error('Failed to save MQTT settings', e);
+                    if (mqttStatus) { mqttStatus.classList.add('error'); mqttStatus.innerHTML = 'Save failed!'; }
+                }
+            });
+        }
+
+        const testBtn = document.querySelector("[name='mqtt_test']");
+        if (testBtn) {
+            testBtn.addEventListener('click', async () => {
+                if (mqttStatus) { mqttStatus.classList.remove('error'); mqttStatus.innerHTML = 'Testing...'; }
+                try {
+                    const test = await Api.testMQTT();
+                    if (mqttStatus) {
+                        mqttStatus.innerHTML = test.connected
+                            ? `Connected to ${test.server}:${test.port}`
+                            : `Not connected (Server: ${test.server || 'not set'})`;
+                        if (!test.connected) mqttStatus.classList.add('error');
+                    }
+                } catch (e) {
+                    console.error('MQTT test failed', e);
+                    if (mqttStatus) { mqttStatus.classList.add('error'); mqttStatus.innerHTML = 'Test failed!'; }
+                }
+            });
+        }
+    })();
+
+    /* Backup & Restore */
+    const btnExport = document.getElementById('btnExport');
+    const btnImport = document.getElementById('btnImport');
+    const fileImport = document.getElementById('fileImport');
+    const backupStatus = document.getElementById('backupStatus');
+
+    if (btnExport) {
+        btnExport.addEventListener('click', () => {
+            if (backupStatus) backupStatus.textContent = 'Exporting...';
+            window.location.href = '/exportsettings';
+            setTimeout(() => { if (backupStatus) backupStatus.textContent = 'Export downloaded!'; }, 1500);
+        });
+    }
+
+    if (btnImport) {
+        btnImport.addEventListener('click', () => {
+            fileImport.click();
+        });
+    }
+
+    if (fileImport) {
+        fileImport.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (backupStatus) backupStatus.textContent = 'Importing ' + file.name + '...';
+            try {
+                const text = await file.text();
+                const json = JSON.parse(text);
+                if (!json._backup || json._backup !== 'ShelfClock') {
+                    if (backupStatus) { backupStatus.textContent = 'Error: Not a valid ShelfClock backup file!'; backupStatus.style.color = 'red'; }
+                    return;
+                }
+                const resp = await fetch('/importsettings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: text
+                });
+                const result = await resp.json();
+                if (result.result === 'ok') {
+                    if (backupStatus) { backupStatus.textContent = 'Settings restored! Reloading...'; backupStatus.style.color = 'green'; }
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    if (backupStatus) { backupStatus.textContent = 'Error: ' + (result.reason || 'Import failed'); backupStatus.style.color = 'red'; }
+                }
+            } catch (e) {
+                if (backupStatus) { backupStatus.textContent = 'Error: ' + e.message; backupStatus.style.color = 'red'; }
+            }
+            fileImport.value = '';
+        });
+    }
     }
 
 
