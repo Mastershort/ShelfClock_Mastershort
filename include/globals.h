@@ -98,6 +98,7 @@ extern byte dateDisplayType;
 extern byte pastelColors;
 extern bool DSTime;
 extern long gmtOffset_sec;
+extern String timeZone;   // POSIX TZ string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"; empty = manual gmtOffset_sec + DSTime
 extern byte ClockColorSettings;
 extern byte DateColorSettings;
 extern int colonType;

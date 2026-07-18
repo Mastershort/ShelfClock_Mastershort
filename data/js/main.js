@@ -20,6 +20,7 @@ const radioButtons = {
 const dropDownSelectors = {
     'ColorChangeFrequency': 'ColorChangeFrequency',
     'suspendFrequency': 'suspendFrequency',
+    'timeZone': 'timeZone',
     'gmtOffset_sec': 'gmtOffset_sec',
     'temperatureCorrection': 'temperatureCorrection',
     'scrollFrequency': 'scrollFrequency',

@@ -177,6 +177,15 @@ byte dateDisplayType = 5; //0-Zero-Padded (MMDD), 1-Space-Padded (MMDD), 2-Cente
 byte pastelColors = 0;
 bool DSTime = 0;
 long gmtOffset_sec = -28800;
+String timeZone = "CET-1CEST,M3.5.0,M10.5.0/3";  // default: Central Europe with automatic DST
+
+void applyTimeConfig() {
+  if (timeZone.length() > 0) {
+    configTzTime(timeZone.c_str(), ntpServer);   // DST handled automatically by the TZ rules
+  } else {
+    configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+  }
+}
 byte ClockColorSettings = 0;
 byte DateColorSettings = 0;
 int colonType = 0;
@@ -607,7 +616,7 @@ void setup() {
   FastLED.show();
   if (firstRun) {delay(500);}
   Serial.println("set the time of the internal RTC from NTP server");
-  configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+  applyTimeConfig();
     if(!getLocalTime(&timeinfo)){ 
       allBlank();
       displayNumber(38,6,CRGB::Blue);  // E
@@ -850,9 +859,9 @@ void loop(){
       } //end of run every hour
       
     if (abs(currentTimeDay - previousTimeDay) >= 1) { 
-        previousTimeDay = currentTimeDay; 
-        randomDayPassed = 1; 
-        configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+        previousTimeDay = currentTimeDay;
+        randomDayPassed = 1;
+        applyTimeConfig();  //daily NTP resync
         daysUptime = daysUptime + 1;
      }
     

@@ -1,4 +1,5 @@
 #include "../include/globals.h"
+#include "../include/ShelfClock.h"
 #include "../include/web_handlers.h"
 #include "../include/display_modes.h"
 #include "../include/settings_manager.h"
@@ -136,6 +137,7 @@ void loadWebPageHandlers() {
     json["colonType"] = colonType;
     json["gmtOffset_sec"] = gmtOffset_sec;
     json["DSTime"] = DSTime;
+    json["timeZone"] = timeZone;
     json["ClockColorSettings"] = ClockColorSettings;
     json["hourColor"] = prefGetU32("hourColor", 0xFF0000);
     json["minColor"] = minColorValue;
@@ -255,9 +257,15 @@ void loadWebPageHandlers() {
         updateSettingsRequired = 1;
       }
 
+      if (!json["timeZone"].isNull()) {
+        timeZone = json["timeZone"].as<String>();
+        applyTimeConfig();
+        updateSettingsRequired = 1;
+      }
       if (!json["gmtOffset_sec"].isNull()) {
         gmtOffset_sec = (long)json["gmtOffset_sec"];
-        configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+        timeZone = "";  // picking a manual offset switches off the automatic timezone
+        applyTimeConfig();
         if(!getLocalTime(&timeinfo)){Serial.println("Error, no NTP Server found!");}
         updateSettingsRequired = 1;
         if (clockMode == 0) { allBlank(); }
@@ -368,7 +376,7 @@ void loadWebPageHandlers() {
       if (!json["DSTime"].isNull()) {
         if ( json["DSTime"] == true) {DSTime = 1;}
         if ( json["DSTime"] == false) {DSTime = 0;}
-        configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+        applyTimeConfig();
         if(!getLocalTime(&timeinfo)){Serial.println("Error, no NTP Server found!");}
         updateSettingsRequired = 1;
         if (clockMode == 0) { allBlank(); }
@@ -1023,6 +1031,7 @@ void loadWebPageHandlers() {
     // Clock settings (same keys as saveclockSettings)
     JsonObject settings = doc.createNestedObject("settings");
     settings["gmtOffset_sec"] = gmtOffset_sec;
+    settings["timeZone"] = timeZone;
     settings["DSTime"] = DSTime;
     settings["countdownColor"] = countdownColorValue;
     settings["spotlightsColor"] = spotlightsColorValue;
@@ -1131,6 +1140,7 @@ void loadWebPageHandlers() {
       JsonObject s = doc["settings"];
       if (s.containsKey("gmtOffset_sec")) gmtOffset_sec = s["gmtOffset_sec"].as<long>();
       if (s.containsKey("DSTime")) DSTime = s["DSTime"].as<bool>();
+      if (s.containsKey("timeZone")) timeZone = s["timeZone"].as<String>();
       if (s.containsKey("countdownColor")) { countdownColorValue = s["countdownColor"].as<uint32_t>(); countdownColor = CRGB(countdownColorValue); }
       if (s.containsKey("spotlightsColor")) { spotlightsColorValue = s["spotlightsColor"].as<uint32_t>(); spotlightsColor = CRGB(spotlightsColorValue); }
       if (s.containsKey("hourColor")) { hourColorValue = s["hourColor"].as<uint32_t>(); hourColor = CRGB(hourColorValue); prefPutU32("hourColor", hourColorValue); }
@@ -1205,7 +1215,7 @@ void loadWebPageHandlers() {
     }
 
     // Save clock settings and apply
-    configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+    applyTimeConfig();
     saveclockSettings("generic");
     haMarkDirty();
     allBlank();

@@ -303,6 +303,7 @@ static bool applyClockSettingsJson(const String& fileContent) {
   colorchangeCD = jsonObj["colorchangeCD"].as<bool>();
   dateDisplayType = jsonObj["dateDisplayType"].as<byte>();
   gmtOffset_sec = jsonObj["gmtOffset_sec"].as<long>();
+  if (!jsonObj["timeZone"].isNull()) { timeZone = jsonObj["timeZone"].as<String>(); }  // keep default when loading pre-timezone settings
   lightshowMode = jsonObj["lightshowMode"].as<int>();
   pastelColors = jsonObj["pastelColors"].as<byte>();
   spotlightsColorValue = jsonObj["spotlightsColor"].as<uint32_t>();
@@ -456,6 +457,7 @@ void saveclockSettings(String fileType) {
   // Add the values to the JSON object
   clockSettings["gmtOffset_sec"] = gmtOffset_sec;
   clockSettings["DSTime"] = DSTime;
+  clockSettings["timeZone"] = timeZone;
   clockSettings["countdownColor"] = countdownColorValue;
   clockSettings["spotlightsColor"] = spotlightsColorValue;
   clockSettings["hourColor"] = hourColorValue;

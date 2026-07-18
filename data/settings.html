@@ -117,7 +117,25 @@
           <label><input type="radio" name="colonType" value="3"> Disabled"</label>
         </div>
         <div>
-          <h3>Timezone Selection:</h3>
+          <h3>Timezone (automatic DST):</h3>
+          <select name="timeZone">
+              <option value="CET-1CEST,M3.5.0,M10.5.0/3">Berlin / Paris / Rom (MEZ, autom. Sommerzeit)</option>
+              <option value="GMT0BST,M3.5.0/1,M10.5.0">London / Dublin</option>
+              <option value="WET0WEST,M3.5.0/1,M10.5.0">Lissabon</option>
+              <option value="EET-2EEST,M3.5.0/3,M10.5.0/4">Athen / Helsinki / Kiew</option>
+              <option value="MSK-3">Moskau (keine Sommerzeit)</option>
+              <option value="UTC0">UTC</option>
+              <option value="EST5EDT,M3.2.0,M11.1.0">New York (Eastern)</option>
+              <option value="CST6CDT,M3.2.0,M11.1.0">Chicago (Central)</option>
+              <option value="MST7MDT,M3.2.0,M11.1.0">Denver (Mountain)</option>
+              <option value="PST8PDT,M3.2.0,M11.1.0">Los Angeles (Pacific)</option>
+              <option value="JST-9">Tokio</option>
+              <option value="AEST-10AEDT,M10.1.0,M4.1.0/3">Sydney</option>
+              <option value="NZST-12NZDT,M9.5.0,M4.1.0/3">Auckland</option>
+              <option value="">Manuell (Offset unten w&auml;hlen)</option>
+          </select>
+          <p class="smaller">Mit einer Zeitzone stellt die Uhr Sommer-/Winterzeit automatisch um. Der manuelle Offset unten gilt nur bei Auswahl von "Manuell".</p>
+          <h3>Manual GMT Offset (fallback):</h3>
           <select name="gmtOffset_sec">
 							<option value="-28800" disabled hidden selected>--Choose an option--</option>
 							<option value="-43200">(UTC-12) Baker Island</option>

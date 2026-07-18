@@ -1,4 +1,5 @@
 #include "../include/ha_integration.h"
+#include "../include/ShelfClock.h"
 #include "../include/display_modes.h"
 #include "../include/settings_manager.h"
 #include "../include/party_games.h"
@@ -245,7 +246,8 @@ void onColonTypeCommand(int8_t index, HASelect* sender) {
 
 void onGmtOffsetCommand(HANumeric value, HANumber* sender) {
     gmtOffset_sec = (long)value.toFloat();
-    configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+    timeZone = "";  // manual offset from HA switches off the automatic timezone
+    applyTimeConfig();
     if (!getLocalTime(&timeinfo)) { Serial.println("Error, no NTP Server found!"); }
     markSettingsChanged();
     if (clockMode == 0) { allBlank(); }
@@ -255,7 +257,8 @@ void onGmtOffsetCommand(HANumeric value, HANumber* sender) {
 
 void onDSTCommand(bool state, HASwitch* sender) {
     DSTime = state ? 1 : 0;
-    configTime(gmtOffset_sec, (daylightOffset_sec * DSTime), ntpServer);
+    timeZone = "";  // manual DST toggle from HA switches off the automatic timezone
+    applyTimeConfig();
     if (!getLocalTime(&timeinfo)) { Serial.println("Error, no NTP Server found!"); }
     markSettingsChanged();
     if (clockMode == 0) { allBlank(); }
