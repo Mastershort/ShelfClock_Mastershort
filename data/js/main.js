@@ -232,6 +232,45 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        /* Brightness quick slider */
+        const homeBrightness = document.querySelector("input[name='homeBrightness']");
+        if (homeBrightness) {
+            const bVal = document.getElementById('brightnessValue');
+            homeBrightness.addEventListener('input', () => { if (bVal) bVal.textContent = homeBrightness.value; });
+            homeBrightness.addEventListener('change', async () => {
+                try {
+                    await Api.postUpdate({ rangeBrightness: parseInt(homeBrightness.value) });
+                } catch (error) {
+                    console.error('Failed to set brightness', error);
+                }
+            });
+        }
+
+        /* Notify test field */
+        const notifySend = document.querySelector("input[name='notifySend']");
+        if (notifySend) {
+            const sendNotify = async () => {
+                const textInput = document.querySelector("input[name='notifyText']");
+                const text = textInput.value.trim();
+                if (!text) return;
+                const color = document.querySelector("input[name='notifyColor']").value.slice(1);
+                try {
+                    await fetch('/notify', { method: 'POST', body: JSON.stringify({ text: text, color: color }) });
+                    textInput.value = '';
+                } catch (error) {
+                    console.error('Failed to send notify', error);
+                }
+            };
+            notifySend.addEventListener('click', sendNotify);
+            document.querySelector("input[name='notifyText']").addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); sendNotify(); }
+            });
+        }
+
+        /* Status bar + active-button highlighting */
+        refreshHomeState();
+        setInterval(refreshHomeState, 3000);
+
         document.querySelectorAll("input[name='upleft'], input[name='upright'], input[name='downleft'], input[name='downright']").forEach(element => {
             element.addEventListener('click', async event => {
                 let left = document.querySelector("input[name='left']");
@@ -598,6 +637,45 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
   /* load home */
+  // Refreshes the home page status bar, active-button highlights and the
+  // brightness slider from /gethome (called every 3s)
+  async function refreshHomeState() {
+    try {
+      const home = await Api.getHome();
+      if (!home) return;
+
+      const bar = document.getElementById('statusBar');
+      if (bar) {
+        const modeNames = { 0: 'Uhr', 1: 'Countdown', 2: 'Party', 3: 'Scoreboard', 4: 'Stoppuhr', 5: 'Lightshow', 7: 'Datum', 8: 'HA-Anzeige', 10: 'Aus', 11: 'Laufschrift' };
+        const wifiQuality = (home.wifiRSSI > -60) ? 'gut' : (home.wifiRSSI > -75 ? 'ok' : 'schwach');
+        bar.textContent = 'Modus: ' + (modeNames[home.clockMode] !== undefined ? modeNames[home.clockMode] : home.clockMode)
+            + '  |  WLAN: ' + wifiQuality + ' (' + home.wifiRSSI + ' dBm)'
+            + '  |  MQTT: ' + (home.mqttConnected ? 'verbunden' : 'getrennt')
+            + '  |  Laufzeit: ' + home.uptime;
+      }
+
+      const hb = document.querySelector("input[name='homeBrightness']");
+      if (hb && document.activeElement !== hb) {
+        hb.value = home.brightness;
+        const bVal = document.getElementById('brightnessValue');
+        if (bVal) bVal.textContent = home.brightness;
+      }
+
+      const modeMap = { ClockMode: 0, DateMode: 7, ScrollingMode: 11, DisplayOffMode: 10 };
+      document.querySelectorAll("input[data-param]").forEach(el => {
+        el.classList.toggle('active', modeMap[el.dataset.param] === home.clockMode);
+      });
+      document.querySelectorAll("[data-lightshow]").forEach(el => {
+        el.classList.toggle('active', home.clockMode === 5 && parseInt(el.dataset.lightshow) === home.lightshowMode);
+      });
+      document.querySelectorAll("[data-party]").forEach(el => {
+        el.classList.toggle('active', home.clockMode === 2 && parseInt(el.dataset.party) === home.partyGameType);
+      });
+    } catch (error) {
+      // clock unreachable - leave the UI as is
+    }
+  }
+
   async function loadHome() {
     try {
       const home = await Api.getHome();

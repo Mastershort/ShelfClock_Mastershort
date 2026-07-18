@@ -282,3 +282,54 @@ a { color: #5599ff; }
   background: none;
   cursor: pointer;
 }
+
+/* Home status bar */
+.status-bar {
+  margin: 0.6rem auto 0;
+  max-width: 740px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: pre-line;
+}
+
+/* Active mode/effect button */
+.btn.active {
+  outline: 2px solid #5599ff;
+  box-shadow: 0 0 8px rgba(85, 153, 255, 0.55);
+}
+
+/* Brightness quick slider */
+.brightness-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.brightness-row input[type='range'] { flex: 1; }
+.brightness-row span { min-width: 2.5rem; text-align: right; color: var(--text-muted); }
+
+/* Notify test field */
+.notify-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.notify-row input[type='text'] {
+  flex: 1;
+  min-width: 12rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+}
+.notify-row input[type='color'] {
+  width: 3rem;
+  height: 2.2rem;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}

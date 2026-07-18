@@ -10,6 +10,7 @@
 #include "../include/prefs.h"
 #include <Update.h>
 #include <HTTPUpdateServer.h>
+#include <WiFi.h>
 
 // Placeholder sent to the browser instead of the real MQTT password;
 // receiving it back unchanged means "keep the stored password"
@@ -118,6 +119,15 @@ void loadWebPageHandlers() {
     String output;
     json["scoreboardLeft"] = scoreboardLeft;
     json["scoreboardRight"] = scoreboardRight;
+    json["clockMode"] = clockMode;
+    json["lightshowMode"] = lightshowMode;
+    json["partyGameType"] = partyGameType;
+    json["brightness"] = brightness;
+    json["wifiRSSI"] = WiFi.RSSI();
+    json["mqttConnected"] = (mqttConnected || haMqtt.isConnected());
+    char up[32];
+    snprintf(up, sizeof(up), "%dd %dh %dm", daysUptime, hoursUptime % 24, minutesUptime % 60);
+    json["uptime"] = up;
     serializeJson(json, output);
     server.send(200, "application/json", output);
   });

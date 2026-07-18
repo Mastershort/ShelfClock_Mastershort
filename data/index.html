@@ -33,6 +33,7 @@
     <section>
       <h2>Live Vorschau</h2>
       <canvas id="ledPreview" class="led-preview"></canvas>
+      <div id="statusBar" class="status-bar"></div>
     </section>
 
     <section>
@@ -42,6 +43,11 @@
         <input type="button" class="btn btn-blue" data-param="DateMode" value="Datum">
         <input type="button" class="btn btn-blue" data-param="ScrollingMode" value="Scrolling">
         <input type="button" class="btn btn-grey" data-param="DisplayOffMode" value="Display Off">
+      </div>
+      <div class="brightness-row">
+        <label>Helligkeit</label>
+        <input type="range" name="homeBrightness" min="1" max="255" value="10">
+        <span id="brightnessValue">10</span>
       </div>
     </section>
 
@@ -55,6 +61,15 @@
         <input type="button" class="btn btn-blue" data-spotmode="2" value="Regenbogen">
         <input type="button" class="btn btn-blue" data-spotmode="3" value="Farbwechsel">
         <input type="button" class="btn btn-blue" data-spotmode="4" value="Funkeln">
+      </div>
+    </section>
+
+    <section>
+      <h2>Nachricht anzeigen</h2>
+      <div class="notify-row">
+        <input type="text" name="notifyText" placeholder="Text f&uuml;r die Laufschrift..." maxlength="100">
+        <input type="color" name="notifyColor" value="#ffffff" title="Farbe">
+        <input type="button" class="btn btn-blue" name="notifySend" value="Senden">
       </div>
     </section>
 
