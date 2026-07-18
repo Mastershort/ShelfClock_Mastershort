@@ -231,6 +231,7 @@ void displayDateMode() {  //main date function
 
 void displayScrollMode(){   //scrollmode for displaying clock things not just text
   currentMode = 0;
+  if (scrollActive) { return; }   //already scrolling - keep going
   if (realtimeMode == 0) {
     if (!getLocalTime(&timeinfo)){ Serial.println("Failed to obtain time");  }
     char strTime[10];
@@ -264,7 +265,7 @@ void displayScrollMode(){   //scrollmode for displaying clock things not just te
     if (scrollOptions4) processedText += String(strYear)        + "  ";
     if (scrollOptions7) processedText += scrollText             + "    ";
     if (scrollOptions8) processedText += String(strIPaddy)      + "  ";
-    scroll(processedText);
+    startScroll(processedText);
   }
 }
 
@@ -410,6 +411,7 @@ void displayLightshowMode() {
 }
 
 void displayRealtimeMode(){   //main RealtimeModes function, always is running
+  if (scrollActive) { return; }   //don't fight with a running scroll over the LEDs
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 1) {EVERY_N_MILLISECONDS(30) {Twinkles();FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 2) {Rainbow();FastLED.show();}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 3) {EVERY_N_MILLISECONDS(100) {GreenMatrix();}}
@@ -480,7 +482,7 @@ void endCountdown() {  //countdown timer has reached 0, sound alarm and flash En
   allBlank();
   clockMode = currentMode;
   realtimeMode = currentReal;
-  if (!breakOutSet) {scroll("tIMEr Ended      tIMEr Ended");}
+  if (!breakOutSet) {startScroll("tIMEr Ended      tIMEr Ended");}
   allBlank();
 }
 
@@ -520,28 +522,7 @@ CRGB colorWheel2(int pos) {   //color wheel for things not the spectrum analyzer
   return color;
 }
 
-void scroll(String IncomingString) {    //main scrolling function
-  Serial.println(IncomingString);
-  breakOutSet = 0;
-  scrollColor = CRGB(scrollColorValue);
-  if (IncomingString.length() > 512 ) { IncomingString = "ArE U A HAckEr"; }   //too big?
-  char SentenceArray[IncomingString.length() + 1];
-  IncomingString.toCharArray(SentenceArray, IncomingString.length()+1);
-  uint16_t TranslatedSentence[(((IncomingString.length()*2)+6)+6)+1];
-  TranslatedSentence[0] = 96;    //pad first 6 at front with a marker
-  TranslatedSentence[1] = 96;
-  TranslatedSentence[2] = 96;
-  TranslatedSentence[3] = 96;
-  TranslatedSentence[4] = 96;
-  TranslatedSentence[5] = 96;
-  TranslatedSentence[(((IncomingString.length()*2)+6)+0)] = 96;  //pad last 6 at back with a marker
-  TranslatedSentence[(((IncomingString.length()*2)+6)+1)] = 96;
-  TranslatedSentence[(((IncomingString.length()*2)+6)+2)] = 96;
-  TranslatedSentence[(((IncomingString.length()*2)+6)+3)] = 96;
-  TranslatedSentence[(((IncomingString.length()*2)+6)+4)] = 96;
-  TranslatedSentence[(((IncomingString.length()*2)+6)+5)] = 96;
-  for (uint16_t realposition=0; realposition<(IncomingString.length()); realposition++){   //run string through translation
-    char SentenceLetter = SentenceArray[realposition];
+static uint16_t translateChar(char SentenceLetter) {   //maps a character to its numbers[] font index
     uint16_t LetterNumber = 10;  //for all unknown characters
     if( SentenceLetter == '0') { LetterNumber = 0; }
     if( SentenceLetter == '1') { LetterNumber = 1; }
@@ -614,34 +595,85 @@ void scroll(String IncomingString) {    //main scrolling function
     if( SentenceLetter == '^') { LetterNumber = 26; }
     if( SentenceLetter == '\'') { LetterNumber = 17; }
     if( SentenceLetter == '%') { LetterNumber = 15; }
-    TranslatedSentence[(realposition*2)+6] = LetterNumber;  //letter starting at position 7
-    TranslatedSentence[(realposition*2)+7] = 96; //add padding to next position because fake digit shares a leg with adjacent real ones and can't be on at the same time
-  }
+    return LetterNumber;
+} //end of translateChar
+
+// --- Non-blocking scrolling state machine ---
+// startScroll() prepares the buffer, scrollTick() (called every loop() pass)
+// advances one column every SCROLL_STEP_MS. While scrollActive is true the
+// normal mode rendering in loop() is skipped.
+#define SCROLL_MAX_CHARS 400
+#define SCROLL_STEP_MS   250
+static uint16_t scrollBuf[SCROLL_MAX_CHARS * 2 + 13];  // 6 pads + 2/char + 6 pads
+static uint16_t scrollSteps = 0;
+static uint16_t scrollStep = 0;
+static unsigned long scrollNextMs = 0;
+static int scrollRepeatsLeft = 0;
+bool scrollActive = false;
+
+void startScroll(String IncomingString) {
+  Serial.println(IncomingString);
+  if (IncomingString.length() == 0) { return; }
+  if (IncomingString.length() > SCROLL_MAX_CHARS) { IncomingString = IncomingString.substring(0, SCROLL_MAX_CHARS); }
+  breakOutSet = 0;
   if (scrollColorSettings == 0){ scrollColor = CRGB(scrollColorValue); }
   if (scrollColorSettings == 1 && pastelColors == 0){ scrollColor = CHSV(random(0, 255), 255, 255); }
   if (scrollColorSettings == 1 && pastelColors == 1){ scrollColor = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
-  for (uint16_t finalposition=0; finalposition<((IncomingString.length()*2)+6); finalposition++){  //count to end of padded array
-    for (int i=0; i<SEGMENTS_LEDS; i++) { LEDs[i] = CRGB::Black;  }    //clear
-    if( TranslatedSentence[finalposition] != 96) { displayNumber(TranslatedSentence[finalposition],6,scrollColor); }
-    if( TranslatedSentence[finalposition+1] != 96) { displayNumber(TranslatedSentence[finalposition+1],5,scrollColor); }
-    if( TranslatedSentence[finalposition+2] != 96) { displayNumber(TranslatedSentence[finalposition+2],4,scrollColor); }
-    if( TranslatedSentence[finalposition+3] != 96) { displayNumber(TranslatedSentence[finalposition+3],3,scrollColor); }
-    if( TranslatedSentence[finalposition+4] != 96) { displayNumber(TranslatedSentence[finalposition+4],2,scrollColor); }
-    if( TranslatedSentence[finalposition+5] != 96) { displayNumber(TranslatedSentence[finalposition+5],1,scrollColor); }
-    if( TranslatedSentence[finalposition+6] != 96) { displayNumber(TranslatedSentence[finalposition+6],0,scrollColor); }
-    FastLED.show();
-    if ( finalposition < ((IncomingString.length()*2)+6)) {
-      for (int i=0; i<250 && !breakOutSet; i++) {
-        server.handleClient();
-        server.handleClient();
-        haMqtt.loop();      // MQTT am Leben erhalten
-        mqttClient.loop();  // MQTT am Leben erhalten
-        delay(1);           // Kurze Pause für Systemstabilität
-      }    //slow down on non-padded parts with web server polls
-    }
+
+  uint16_t len = IncomingString.length();
+  for (int k = 0; k < 6; k++) { scrollBuf[k] = 96; }              //pad front with markers
+  for (uint16_t i = 0; i < len; i++) {
+    scrollBuf[i * 2 + 6] = translateChar(IncomingString[i]);
+    scrollBuf[i * 2 + 7] = 96;  //padding - fake digit shares a leg with adjacent real ones
   }
+  for (int k = 0; k < 6; k++) { scrollBuf[len * 2 + 6 + k] = 96; } //pad back with markers
+  scrollSteps = len * 2 + 6;
+  scrollStep = 0;
+  scrollRepeatsLeft = 0;
+  scrollNextMs = millis();
+  scrollActive = true;
+}
+
+void startScrollColored(String text, CRGB color, int repeat) {  //scroll in a fixed color (notifications)
+  startScroll(text);
+  if (!scrollActive) { return; }
+  scrollColor = color;
+  scrollRepeatsLeft = (repeat > 1) ? repeat - 1 : 0;
+}
+
+void stopScroll() {
+  if (!scrollActive) { return; }
+  scrollActive = false;
   allBlank();
-  allBlank();
+}
+
+void scrollTick() {
+  if (!scrollActive) { return; }
+  if (breakOutSet) { stopScroll(); return; }
+  unsigned long now = millis();
+  if ((long)(now - scrollNextMs) < 0) { return; }
+  scrollNextMs = now + SCROLL_STEP_MS;
+  for (int i = 0; i < SEGMENTS_LEDS; i++) { LEDs[i] = CRGB::Black; }    //clear
+  for (int d = 0; d < 7; d++) {
+    if (scrollBuf[scrollStep + d] != 96) { displayNumber(scrollBuf[scrollStep + d], 6 - d, scrollColor); }
+  }
+  FastLED.show();
+  scrollStep++;
+  if (scrollStep >= scrollSteps) {
+    if (scrollRepeatsLeft > 0) { scrollRepeatsLeft--; scrollStep = 0; }
+    else { stopScroll(); }
+  }
+}
+
+void scroll(String IncomingString) {  //blocking wrapper - only for setup(), before loop() runs
+  startScroll(IncomingString);
+  while (scrollActive) {
+    scrollTick();
+    server.handleClient();
+    haMqtt.loop();
+    mqttClient.loop();
+    delay(1);
+  }
 } //end of scroll function
 
 

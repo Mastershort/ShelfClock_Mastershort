@@ -754,6 +754,7 @@ void loop(){
     // the flash write is not disturbed (FastLED.show() blocks interrupts)
     return;
   }
+  scrollTick();  // advance a running scroll (non-blocking, one column per step)
   if (WiFi.status() != WL_CONNECTED) {
     WiFi_elapsedTime = millis() - WiFi_startTime;
     if (WiFi_elapsedTime >= WiFi_MAX_RETRY_DURATION) {
@@ -801,18 +802,10 @@ void loop(){
   }
 
   // Scroll queued notifications (from MQTT shelfclock/notify or HTTP /notify)
-  if (notifyPending) {
+  // - waits until a possibly running scroll has finished
+  if (notifyPending && !scrollActive) {
     notifyPending = false;
-    uint32_t savedScrollColorValue = scrollColorValue;
-    int savedScrollColorSettings = scrollColorSettings;
-    scrollColorValue = notifyColorValue;
-    scrollColorSettings = 0;  // force the requested fixed color
-    for (int r = 0; r < notifyRepeat && !breakOutSet; r++) {
-      scroll(notifyText);
-    }
-    scrollColorValue = savedScrollColorValue;
-    scrollColorSettings = savedScrollColorSettings;
-    allBlank();
+    startScrollColored(notifyText, CRGB(notifyColorValue), notifyRepeat);
   }
 
   // Auto-save settings after 3 seconds of last change to prevent data loss
@@ -900,6 +893,8 @@ void loop(){
        //FastLED.show();
     }
     //give the various clock modes CPU time every 1 seconds
+    //(skipped while a scroll is running - scrollTick() owns the display then)
+    if (!scrollActive) {
     if ((suspendType == 0 || isAsleep == 0) && clockMode == 0) {
        displayTimeMode();
     }  else if (clockMode == 1) {
@@ -919,9 +914,10 @@ void loop(){
     }  else if (clockMode == 10) {
       //display off
     }  else if ((suspendType == 0 || isAsleep == 0) && clockMode == 11) {
-       displayScrollMode();  
-    } 
-    ShelfDownLights(); 
+       displayScrollMode();
+    }
+    }  //end of !scrollActive
+    ShelfDownLights();
     randomMinPassed = 0; 
     randomHourPassed = 0; 
     randomDayPassed = 0; 

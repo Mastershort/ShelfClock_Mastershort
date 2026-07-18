@@ -82,7 +82,7 @@ Notable endpoints: `/getleds` (hex LED state for preview, polled every 500ms), `
 
 ## Known Issues / Open Work
 
-- `scroll()` blocks the main loop for the whole scroll duration (calls `server.handleClient()` mid-render as a workaround) - wants a non-blocking state-machine rewrite
+- Scrolling is a non-blocking state machine: `startScroll()`/`startScrollColored()` queue text, `scrollTick()` (every `loop()` pass) renders one column per 250ms while `scrollActive` suppresses normal mode rendering. The blocking `scroll()` wrapper exists only for `setup()`.
 - `/updateanything` is a ~400-line if-chain, could be table-driven
 - `checkSleepTimer()` is empty (suspend/sleep feature unfinished)
 - Planned features: HA-Notify (MQTT messages scrolled on the clock), sunrise alarm, birthday confetti via scheduler

@@ -115,7 +115,7 @@ void processSchedules(bool alarmType) {
     else { currentEOM = 31; }
     if ((dom == mday) || (dom == 34 && (mday == currentEOM)) || (dom == 33 && (mday == (currentEOM-1))) || (dom == 32 && (mday == (currentEOM-2))))  {
       if (((hours == hour && minutes == mins) || (hours == 99 && minutes == mins) || (hours == hour && mins == 99 && minutes == 0))) {
-              if (!breakOutSet) {scroll(title);}
+              if (!breakOutSet) {startScroll(title);}
               allBlank();
       }
     }
@@ -135,7 +135,7 @@ void processSchedules(bool alarmType) {
             deleteFile(FileFS, processedText);
             fileChanged = 1;
           }
-          if (!breakOutSet) {scroll(title);}
+          if (!breakOutSet) {startScroll(title);}
           allBlank();
         }
    }
@@ -144,7 +144,7 @@ void processSchedules(bool alarmType) {
      if (mont == month && mday == day) {
           Serial.println("special alarm");
         if (hour == 12 && mins == 0) {
-          if (!breakOutSet) {scroll(title);}
+          if (!breakOutSet) {startScroll(title);}
           allBlank();
         }
      }
@@ -152,7 +152,7 @@ void processSchedules(bool alarmType) {
 
    if (scheduleType == 4)  {
     if (mont == 01 && mday == 01 && hour == 0 && mins == 0) {
-          if (!breakOutSet) {scroll(title);}
+          if (!breakOutSet) {startScroll(title);}
           allBlank();
     }
    }

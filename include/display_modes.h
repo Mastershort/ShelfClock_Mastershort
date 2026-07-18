@@ -26,6 +26,13 @@ void BlinkDots();
 void ShelfDownLights();
 void endCountdown();
 void checkSleepTimer();
-void scroll(String text);
+
+// --- Scrolling (non-blocking state machine) ---
+void scroll(String text);          // blocking wrapper, only for setup()
+void startScroll(String text);     // queue text, rendered via scrollTick()
+void startScrollColored(String text, CRGB color, int repeat);
+void scrollTick();                 // call every loop() pass
+void stopScroll();
+extern bool scrollActive;          // true while a scroll is running
 CRGB colorWheel(int pos);
 CRGB colorWheel2(int pos);
