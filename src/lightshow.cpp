@@ -678,3 +678,21 @@ void PixelTheaterChase() {  // Theater-style chase at pixel level
   chaseHue += 1;
   if (clockMode != 5) { allBlank(); }
 } //PixelTheaterChase
+
+void StarrySky() {  // Night sky: single pixels ignite as stars, twinkle and slowly fade out
+  for (int i = 0; i < SEGMENTS_LEDS; i++) {
+    LEDs[i].nscale8(250);  // gentle exponential fade - a star glows for a few seconds
+  }
+  if (random8() < 40) {  // ignite a new star now and then
+    int led = random16(SEGMENTS_LEDS);
+    if (random8() < 60) {
+      LEDs[led] = CHSV(32, 120, 150 + random8(105));       // warm yellowish star
+    } else {
+      LEDs[led] = CHSV(160, random8(60), 120 + random8(135)); // cold blue-white star
+    }
+  }
+  if (random16() < 60) {  // rare bright flash
+    LEDs[random16(SEGMENTS_LEDS)] = CRGB::White;
+  }
+  if (clockMode != 5) { allBlank(); }
+} //StarrySky

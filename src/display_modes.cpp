@@ -431,6 +431,7 @@ void displayRealtimeMode(){   //main RealtimeModes function, always is running
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 19) {EVERY_N_MILLISECONDS(30) {PixelFireworks(); FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 20) {EVERY_N_MILLISECONDS(20) {PixelRunningLights(); FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 21) {EVERY_N_MILLISECONDS(60) {PixelTheaterChase(); FastLED.show();}}
+  if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 22) {EVERY_N_MILLISECONDS(30) {StarrySky(); FastLED.show();}}
 
   // Random Lightshow – cycle through all effects
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 13) {
@@ -438,7 +439,7 @@ void displayRealtimeMode(){   //main RealtimeModes function, always is running
     static unsigned long randomLastSwitch = 0;
     if (millis() - randomLastSwitch > 15000) { // switch every 15 seconds
       randomLastSwitch = millis();
-      randomCurrentEffect = random(0, 22); // pick random effect 0-21
+      do { randomCurrentEffect = random(0, 23); } while (randomCurrentEffect == 13); // any effect except "Random" itself
       allBlank();
       oldsnakecolor = CRGB::Green;
       getSlower = 180;
@@ -465,6 +466,7 @@ void displayRealtimeMode(){   //main RealtimeModes function, always is running
       case 19: EVERY_N_MILLISECONDS(30)  { PixelFireworks(); FastLED.show(); } break;
       case 20: EVERY_N_MILLISECONDS(20)  { PixelRunningLights(); FastLED.show(); } break;
       case 21: EVERY_N_MILLISECONDS(60)  { PixelTheaterChase(); FastLED.show(); } break;
+      case 22: EVERY_N_MILLISECONDS(30)  { StarrySky(); FastLED.show(); } break;
     }
   }
 }//end of RealtimeModes

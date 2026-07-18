@@ -429,7 +429,7 @@ void setupHA() {
     haMode.onCommand(onModeCommand);
     haMqtt.addDeviceType(&haMode);
 
-    haLightShowMode.setOptions("Chase;Twinkles;Rainbow;Matrix;Rain;Fire;Snake;Cylon;Breathing;Sparkle;Meteor;ColorWipe;Plasma;Random;Confetti;Juggle;Heartbeat;PixelRainbow;PixelWave;PixelFireworks;PixelLights;PixelTheater");
+    haLightShowMode.setOptions("Chase;Twinkles;Rainbow;Matrix;Rain;Fire;Snake;Cylon;Breathing;Sparkle;Meteor;ColorWipe;Plasma;Random;Confetti;Juggle;Heartbeat;PixelRainbow;PixelWave;PixelFireworks;PixelLights;PixelTheater;StarrySky");
     haLightShowMode.setName("Lightshow: Effect");
     haLightShowMode.onCommand(onLightShowCommand);
     haMqtt.addDeviceType(&haLightShowMode);

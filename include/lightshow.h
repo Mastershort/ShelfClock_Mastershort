@@ -24,6 +24,7 @@ void PixelWave();
 void PixelFireworks();
 void PixelRunningLights();
 void PixelTheaterChase();
+void StarrySky();
 
 // --- Lightshow helpers ---
 void updateMatrix();
