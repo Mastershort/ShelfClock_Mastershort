@@ -124,6 +124,11 @@ int daysUptime = 0;
 int hoursUptime = 0;
 int minutesUptime = 0;
 
+bool notifyPending = false;
+String notifyText = "";
+uint32_t notifyColorValue = 0xFFFFFF;
+int notifyRepeat = 1;
+
 bool otaInProgress = false;
 const char* lastResetReason = "unknown";
 
@@ -793,6 +798,21 @@ void loop(){
     }
   } else {
     mqttClient.loop();  // Process MQTT messages
+  }
+
+  // Scroll queued notifications (from MQTT shelfclock/notify or HTTP /notify)
+  if (notifyPending) {
+    notifyPending = false;
+    uint32_t savedScrollColorValue = scrollColorValue;
+    int savedScrollColorSettings = scrollColorSettings;
+    scrollColorValue = notifyColorValue;
+    scrollColorSettings = 0;  // force the requested fixed color
+    for (int r = 0; r < notifyRepeat && !breakOutSet; r++) {
+      scroll(notifyText);
+    }
+    scrollColorValue = savedScrollColorValue;
+    scrollColorSettings = savedScrollColorSettings;
+    allBlank();
   }
 
   // Auto-save settings after 3 seconds of last change to prevent data loss

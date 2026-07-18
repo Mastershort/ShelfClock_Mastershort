@@ -681,6 +681,20 @@ void loadWebPageHandlers() {
     server.send(200, "text/html", page);
   });
 
+  server.on("/notify", HTTP_POST, []() {
+    // Same payload as MQTT shelfclock/notify:
+    // {"text": "...", "color": "FF0000", "repeat": 2} or plain text
+    String body = server.arg("plain");
+    if (body.length() == 0 && server.args() > 0) {
+      body = server.arg(0);
+    }
+    if (queueNotify(body)) {
+      server.send(200, "application/json", "{\"result\":\"ok\"}");
+    } else {
+      server.send(400, "application/json", "{\"result\":\"error\",\"reason\":\"no text\"}");
+    }
+  });
+
   server.on("/getleds", []() {
     // Live LED state for the web preview: 2 hex chars brightness,
     // then 6 hex chars (rrggbb) per LED in physical strip order

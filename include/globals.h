@@ -205,6 +205,12 @@ extern int daysUptime;
 extern int hoursUptime;
 extern int minutesUptime;
 
+// --- Notify queue (MQTT shelfclock/notify + HTTP /notify) ---
+extern bool notifyPending;
+extern String notifyText;
+extern uint32_t notifyColorValue;
+extern int notifyRepeat;
+
 // --- OTA update state ---
 extern bool otaInProgress;       // true while /update or /updatefs uploads run - loop() must not touch LEDs or LittleFS
 extern const char* lastResetReason;

@@ -18,6 +18,7 @@ extern String mqttClientId;
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void setupMQTT();
 bool mqttReconnect();
+bool queueNotify(const String& message);
 
 
 
