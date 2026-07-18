@@ -5,6 +5,9 @@
 #include "globals.h"
 #include "ShelfClock.h"
 
+// --- HA device (for configuration URL etc.) ---
+extern HADevice device;
+
 // --- HA-specific functions ---
 void setupHA();
 void setDisplayMode(String mode);

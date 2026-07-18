@@ -1,0 +1,134 @@
+# ShelfClock - aufgeraeumtes Home-Assistant-Dashboard
+#
+# Verwendung:
+#   1. HA: Einstellungen -> Dashboards -> "+ Dashboard hinzufuegen" -> "Neues Dashboard von Grund auf"
+#   2. Dashboard oeffnen -> Stift (Bearbeiten) -> drei Punkte oben rechts -> "Raw-Konfigurationseditor"
+#   3. Kompletten Inhalt dieser Datei einfuegen und speichern
+#
+# Hinweis: Die Entity-IDs leiten sich aus den Entity-Namen ab. Falls eine Karte
+# "Entity not found" zeigt, die tatsaechliche ID unter Entwicklerwerkzeuge ->
+# Zustaende nachschlagen (nach "shelfclock" oder dem Namen suchen) und anpassen.
+
+views:
+  - title: ShelfClock
+    icon: mdi:clock-digital
+    cards:
+      - type: entities
+        title: Uhr
+        show_header_toggle: false
+        entities:
+          - entity: select.mode
+            name: Modus
+          - entity: number.display_brightness
+            name: Helligkeit
+          - entity: select.lightshow_effect
+            name: Lightshow-Effekt
+
+      - type: entities
+        title: Spotlights
+        show_header_toggle: false
+        entities:
+          - entity: switch.spotlights_enable
+            name: An/Aus
+          - entity: select.spotlights_color_mode
+            name: Farbmodus
+          - entity: light.color_spotlights
+            name: Farbe
+
+      - type: entities
+        title: Farben
+        show_header_toggle: false
+        entities:
+          - entity: light.color_hour
+            name: Stunden
+          - entity: light.color_minute
+            name: Minuten
+          - entity: light.color_colon
+            name: Doppelpunkt
+          - entity: light.color_day
+            name: Tag
+          - entity: light.color_month
+            name: Monat
+          - entity: light.color_separator
+            name: Datums-Trenner
+          - entity: light.color_scroll
+            name: Laufschrift
+          - entity: light.color_countdown
+            name: Countdown
+          - entity: light.color_score_left
+            name: Score links
+          - entity: light.color_score_right
+            name: Score rechts
+
+      - type: entities
+        title: Farb-Verhalten
+        show_header_toggle: false
+        entities:
+          - entity: select.clock_color_mode
+            name: Uhr-Farbmodus
+          - entity: select.display_color_palette
+            name: Palette
+          - entity: select.display_color_change_frequency
+            name: Wechsel-Frequenz
+
+      - type: entities
+        title: Laufschrift
+        show_header_toggle: false
+        entities:
+          - entity: switch.scroll_override
+            name: Regelm. einblenden
+          - entity: select.scroll_frequency
+            name: Frequenz
+          - entity: select.scroll_color_mode
+            name: Farbmodus
+          - entity: switch.scroll_show_text
+            name: Eigener Text
+          - entity: switch.scroll_show_military_time
+            name: Uhrzeit (24h)
+          - entity: switch.scroll_show_day_of_week
+            name: Wochentag
+          - entity: switch.scroll_show_date
+            name: Datum
+          - entity: switch.scroll_show_year
+            name: Jahr
+          - entity: switch.scroll_show_ip_address
+            name: IP-Adresse
+
+      - type: entities
+        title: Timer & Stoppuhr
+        show_header_toggle: false
+        entities:
+          - entity: number.countdown_seconds
+            name: Countdown Sekunden
+          - entity: button.countdown_start
+            name: Countdown starten
+          - entity: switch.countdown_color_change
+            name: Countdown Farbwechsel
+          - entity: number.stopwatch_seconds
+            name: Stoppuhr Sekunden
+          - entity: button.stopwatch_start
+            name: Stoppuhr starten
+
+      - type: entities
+        title: Scoreboard & Party
+        show_header_toggle: false
+        entities:
+          - entity: number.scoreboard_left_score
+            name: Score links
+          - entity: number.scoreboard_right_score
+            name: Score rechts
+          - entity: button.scoreboard_apply
+            name: Scoreboard anzeigen
+          - entity: select.party_game_type
+            name: Party-Spiel
+          - entity: button.party_start_game
+            name: Spiel starten
+
+      - type: entities
+        title: HA-Anzeige
+        show_header_toggle: false
+        entities:
+          - entity: number.ha_display_number
+            name: Zahl anzeigen
+          - entity: switch.ha_display_show_degree
+            name: Grad-Symbol

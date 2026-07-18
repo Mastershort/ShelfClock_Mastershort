@@ -577,6 +577,13 @@ void setup() {
     // Load MQTT settings and initialize both MQTT systems
     setupMQTT();  // Loads MQTT settings from Preferences into mqttServer, mqttPort, mqttUser, mqttPassword
 
+    // "Visit device" link on the HA device page -> opens the clock's web UI
+    static char haConfigUrl[40];
+    if (WiFi.status() == WL_CONNECTED) {
+        snprintf(haConfigUrl, sizeof(haConfigUrl), "http://%s", WiFi.localIP().toString().c_str());
+        device.setConfigurationUrl(haConfigUrl);
+    }
+
     // Initialize Home Assistant MQTT with loaded credentials
     if (mqttServer.length() > 0) {
         Serial.println("Initializing Home Assistant MQTT...");

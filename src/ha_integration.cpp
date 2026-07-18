@@ -19,15 +19,7 @@ HASelect haMode("sc_mode");
 HASelect haLightShowMode("sc_lightshow_mode");
 HASelect haPalette("sc_palette");
 HASelect haColorChangeFreq("sc_color_change_freq");
-HASelect haSuspendType("sc_suspend_type");
-HASelect haSuspendFreq("sc_suspend_freq");
-HASelect haClockDisplay("sc_clock_display");
-HASelect haColonType("sc_colon_type");
-HANumber haGmtOffset("sc_gmt_offset");
-HASwitch haDST("sc_dst");
 HASelect haClockColorSettings("sc_clock_color_settings");
-HASelect haDateDisplay("sc_date_display");
-HASelect haDateColorSettings("sc_date_color_settings");
 HASelect haScrollFrequency("sc_scroll_frequency");
 HASwitch haScrollOpt1("sc_scroll_opt1");
 HASwitch haScrollOpt2("sc_scroll_opt2");
@@ -217,73 +209,10 @@ void onColorChangeFreqCommand(int8_t index, HASelect* sender) {
     sender->setState(index);
 }
 
-void onSuspendTypeCommand(int8_t index, HASelect* sender) {
-    suspendType = index;
-    markSettingsChanged();
-    sender->setState(index);
-}
-
-void onSuspendFreqCommand(int8_t index, HASelect* sender) {
-    static const int values[] = {1, 5, 10, 15, 30, 45, 60};
-    suspendFrequency = values[index < 0 ? 0 : index];
-    markSettingsChanged();
-    sender->setState(index);
-}
-
-void onClockDisplayCommand(int8_t index, HASelect* sender) {
-    clockDisplayType = index;
-    markSettingsChanged();
-    if (clockMode == 0) { allBlank(); }
-    sender->setState(index);
-}
-
-void onColonTypeCommand(int8_t index, HASelect* sender) {
-    colonType = index;
-    markSettingsChanged();
-    if (clockMode == 0) { allBlank(); }
-    sender->setState(index);
-}
-
-void onGmtOffsetCommand(HANumeric value, HANumber* sender) {
-    gmtOffset_sec = (long)value.toFloat();
-    timeZone = "";  // manual offset from HA switches off the automatic timezone
-    applyTimeConfig();
-    if (!getLocalTime(&timeinfo)) { Serial.println("Error, no NTP Server found!"); }
-    markSettingsChanged();
-    if (clockMode == 0) { allBlank(); }
-    printLocalTime();
-    sender->setState(value);
-}
-
-void onDSTCommand(bool state, HASwitch* sender) {
-    DSTime = state ? 1 : 0;
-    timeZone = "";  // manual DST toggle from HA switches off the automatic timezone
-    applyTimeConfig();
-    if (!getLocalTime(&timeinfo)) { Serial.println("Error, no NTP Server found!"); }
-    markSettingsChanged();
-    if (clockMode == 0) { allBlank(); }
-    printLocalTime();
-    sender->setState(state);
-}
-
 void onClockColorSettingsCommand(int8_t index, HASelect* sender) {
     ClockColorSettings = index;
     markSettingsChanged();
     if (clockMode == 0) { allBlank(); }
-    sender->setState(index);
-}
-
-void onDateDisplayCommand(int8_t index, HASelect* sender) {
-    dateDisplayType = index;
-    markSettingsChanged();
-    if (clockMode == 7) { allBlank(); }
-    sender->setState(index);
-}
-
-void onDateColorSettingsCommand(int8_t index, HASelect* sender) {
-    DateColorSettings = index;
-    markSettingsChanged();
-    if (clockMode == 7) { allBlank(); }
     sender->setState(index);
 }
 
@@ -515,51 +444,12 @@ void setupHA() {
     haColorChangeFreq.onCommand(onColorChangeFreqCommand);
     haMqtt.addDeviceType(&haColorChangeFreq);
 
-    haSuspendType.setOptions("Disabled;Digits Only;All Lights");
-    haSuspendType.setName("Display: Suspend Type");
-    haSuspendType.onCommand(onSuspendTypeCommand);
-    haMqtt.addDeviceType(&haSuspendType);
-
-    haSuspendFreq.setOptions("1;5;10;15;30;45;60");
-    haSuspendFreq.setName("Display: Suspend Minutes");
-    haSuspendFreq.onCommand(onSuspendFreqCommand);
-    haMqtt.addDeviceType(&haSuspendFreq);
-
-    haClockDisplay.setOptions("Center 3-Digit;24h Military;12h Space-Padded;Blinking Center;New Years");
-    haClockDisplay.setName("Clock: Display Type");
-    haClockDisplay.onCommand(onClockDisplayCommand);
-    haMqtt.addDeviceType(&haClockDisplay);
-
-    haColonType.setOptions("Colon;Bar;Period");
-    haColonType.setName("Clock: Colon Type");
-    haColonType.onCommand(onColonTypeCommand);
-    haMqtt.addDeviceType(&haColonType);
-
-    haGmtOffset.setName("Clock: UTC Offset");
-    haGmtOffset.setMin(-43200);
-    haGmtOffset.setMax(50400);
-    haGmtOffset.setStep(900);
-    haGmtOffset.onCommand(onGmtOffsetCommand);
-    haMqtt.addDeviceType(&haGmtOffset);
-
-    haDST.setName("Clock: Daylight Savings");
-    haDST.onCommand(onDSTCommand);
-    haMqtt.addDeviceType(&haDST);
 
     haClockColorSettings.setOptions("Separate Colors;Hour = Minutes;Random Each;Same Random;Random Every Second");
     haClockColorSettings.setName("Clock: Color Mode");
     haClockColorSettings.onCommand(onClockColorSettingsCommand);
     haMqtt.addDeviceType(&haClockColorSettings);
 
-    haDateDisplay.setOptions("Zero-Padded;Space-Padded;Center 3-Digit;Day of Week;Numeric Day;Separator;Year");
-    haDateDisplay.setName("Date: Display Type");
-    haDateDisplay.onCommand(onDateDisplayCommand);
-    haMqtt.addDeviceType(&haDateDisplay);
-
-    haDateColorSettings.setOptions("Separate Colors;Month = Day;Random Each;Same Random;Random Every Second");
-    haDateColorSettings.setName("Date: Color Mode");
-    haDateColorSettings.onCommand(onDateColorSettingsCommand);
-    haMqtt.addDeviceType(&haDateColorSettings);
 
     haScrollFrequency.setOptions("Every Minute;Every 5 Minutes;Every 10 Minutes;Every 15 Minutes;Every 30 Minutes;Every Hour");
     haScrollFrequency.setName("Scroll: Frequency");
@@ -702,6 +592,22 @@ void setupHA() {
 
 void haSyncState() {
     unsigned long now = millis();
+
+    // One-time cleanup: remove retained discovery configs of entities that
+    // used to exist - otherwise they linger in HA as "unavailable" forever
+    static bool staleConfigsCleaned = false;
+    if (!staleConfigsCleaned && haMqtt.isConnected()) {
+        static const char* staleComponents[] = {"select", "select", "select", "select", "number", "switch", "select", "select"};
+        static const char* staleIds[] = {"sc_suspend_type", "sc_suspend_freq", "sc_clock_display", "sc_colon_type",
+                                         "sc_gmt_offset", "sc_dst", "sc_date_display", "sc_date_color_settings"};
+        char topic[128];
+        for (int i = 0; i < 8; i++) {
+            snprintf(topic, sizeof(topic), "homeassistant/%s/%s/%s/config", staleComponents[i], device.getUniqueId(), staleIds[i]);
+            haMqtt.publish(topic, "", true);
+        }
+        staleConfigsCleaned = true;
+    }
+
     if (!haDirty && (now - lastHaSyncMs < 1000)) return;
     lastHaSyncMs = now;
     haDirty = false;
@@ -710,18 +616,7 @@ void haSyncState() {
     haLightShowMode.setState(lightshowMode);
     haPalette.setState(pastelColors ? 1 : 0);
     haColorChangeFreq.setState(ColorChangeFrequency);
-    haSuspendType.setState(suspendType);
-
-    static const int suspendValues[] = {1, 5, 10, 15, 30, 45, 60};
-    haSuspendFreq.setState(indexOfValue(suspendValues, 7, suspendFrequency));
-
-    haClockDisplay.setState(clockDisplayType);
-    haColonType.setState(colonType);
-    haGmtOffset.setState((float)gmtOffset_sec);
-    haDST.setState(DSTime);
     haClockColorSettings.setState(ClockColorSettings);
-    haDateDisplay.setState(dateDisplayType);
-    haDateColorSettings.setState(DateColorSettings);
 
     static const int scrollFreqValues[] = {1, 2, 3, 4, 5, 6};
     haScrollFrequency.setState(indexOfValue(scrollFreqValues, 6, scrollFrequency));
