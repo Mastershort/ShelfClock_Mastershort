@@ -662,6 +662,36 @@ void applyBrightness() {
   FastLED.setBrightness(brightness);
 }
 
+// Partial-segment glyphs: letters like M/W/V/X/K are barely readable with
+// whole 7-segment strokes. These glyphs light segments in THIRDS instead -
+// per role a 3-bit mask in visual order (bit0 = top/left third, bit1 =
+// middle, bit2 = bottom/right third): 0b111 full, 0b101 gap in the middle,
+// 0b010 center only. Role order matches numbers[]: 0=lower-right, 1=bottom,
+// 2=lower-left, 3=upper-left, 4=top, 5=upper-right, 6=middle.
+struct PartialGlyph {
+  byte charIndex;   // index into numbers[]
+  byte thirds[7];
+};
+static const PartialGlyph partialGlyphs[] = {
+  //     r0     r1     r2     r3     r4     r5     r6
+  {46, {0b111, 0b000, 0b111, 0b111, 0b101, 0b111, 0b000}},  // M: towers, notch at top center
+  {78, {0b111, 0b000, 0b111, 0b111, 0b101, 0b111, 0b000}},  // m
+  {56, {0b111, 0b101, 0b111, 0b111, 0b000, 0b111, 0b000}},  // W: towers, notch at bottom center
+  {88, {0b111, 0b101, 0b111, 0b111, 0b000, 0b111, 0b000}},  // w
+  {55, {0b111, 0b010, 0b111, 0b111, 0b000, 0b111, 0b000}},  // V: sides + pointed bottom center
+  {87, {0b111, 0b010, 0b111, 0b111, 0b000, 0b111, 0b000}},  // v
+  {57, {0b011, 0b000, 0b011, 0b110, 0b000, 0b110, 0b010}},  // X: hourglass pinch at the middle
+  {89, {0b011, 0b000, 0b011, 0b110, 0b000, 0b110, 0b010}},  // x
+  {44, {0b011, 0b000, 0b111, 0b111, 0b000, 0b110, 0b011}},  // K: left bar + angled arms
+  {76, {0b011, 0b000, 0b111, 0b111, 0b000, 0b110, 0b011}},  // k
+};
+
+// LED direction per segment role (ascending FAKE_LEDs order vs. visual
+// top->bottom / left->right). Fake digit columns borrow their verticals from
+// the neighbouring real digits, so their directions differ.
+static const bool segVisualReversedReal[7] = {false, true, true, true, false, false, true};
+static const bool segVisualReversedFake[7] = {true,  true, false, false, false, true, true};
+
 void displayNumber(uint16_t number, byte segment, CRGB color) {   //main digit rendering (except when scrolling)
   // segments from left to right: 6, 5, 4, 3, 2, 1, 0
   uint16_t startindex = 0;
@@ -690,10 +720,25 @@ void displayNumber(uint16_t number, byte segment, CRGB color) {   //main digit r
       break;
   }
 
+  // does this character use a partial-segment glyph?
+  const byte* partial = NULL;
+  for (unsigned int p = 0; p < sizeof(partialGlyphs) / sizeof(partialGlyphs[0]); p++) {
+    if (partialGlyphs[p].charIndex == number) { partial = partialGlyphs[p].thirds; break; }
+  }
+  const bool* rev = (segment % 2 == 1) ? segVisualReversedFake : segVisualReversedReal;
+
   for (byte i=0; i<SEGMENTS_PER_NUMBER; i++){                // 7 segments
-    for (byte j=0; j<LEDS_PER_SEGMENT; j++ ){              // 7 LEDs per segment
+    for (byte j=0; j<LEDS_PER_SEGMENT; j++ ){              // LEDs per segment
       yield();
-      LEDs[FAKE_LEDs[i * LEDS_PER_SEGMENT + j + startindex]] = ((numbers[number] & 1 << i) == 1 << i) ? color : alternateColor;
+      bool ledOn;
+      if (partial) {
+        byte visualPos = rev[i] ? (LEDS_PER_SEGMENT - 1 - j) : j;
+        byte third = (visualPos * 3) / LEDS_PER_SEGMENT;
+        ledOn = partial[i] & (1 << third);
+      } else {
+        ledOn = (numbers[number] & (1 << i)) != 0;
+      }
+      LEDs[FAKE_LEDs[i * LEDS_PER_SEGMENT + j + startindex]] = ledOn ? color : alternateColor;
     }
   }
 } //end of displayNumber
