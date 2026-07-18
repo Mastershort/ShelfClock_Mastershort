@@ -13,6 +13,14 @@ views:
   - title: ShelfClock
     icon: mdi:clock-digital
     cards:
+      # Live-Vorschau der Uhr (die Uhr rendert ihren LED-Zustand selbst).
+      # URL ggf. anpassen: feste IP eintragen, falls "shelfclock" im Browser
+      # nicht aufloest. Funktioniert nur, wenn HA per HTTP oder im gleichen
+      # Netz aufgerufen wird (HTTPS-HA blockiert eingebettete HTTP-Seiten).
+      - type: iframe
+        url: http://shelfclock/preview.html
+        aspect_ratio: 29%
+
       - type: entities
         title: Uhr
         show_header_toggle: false
