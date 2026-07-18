@@ -4,172 +4,85 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ShelfClock is an ESP32-based smart LED clock with 7-segment display using WS2812B LEDs. It features multiple display modes (clock, temperature, date, humidity, countdown, scoreboard, music visualizer), web interface configuration, MQTT integration, and Home Assistant integration.
+ShelfClock is an ESP32-based smart LED shelf clock with a 7-segment display built from WS2812B LEDs. It features multiple display modes (clock, date, countdown, scoreboard, stopwatch, lightshows, scrolling text, party games, HA value display), a web interface with live LED preview, MQTT integration and Home Assistant integration (MQTT discovery).
 
-**Hardware**: ESP-WROOM-32, DS3231 RTC, DHT11 sensor, photoresistor, sound detector, WS2812B LEDs (configurable 6-9 per segment)
+**Hardware (this build)**: ESP-WROOM-32, WS2812B LEDs on **GPIO 15** (`LED_PIN` in globals.h - the upstream default is 4, do not revert!), **9 LEDs per segment** (the original instructions use 7; the wiring order/topology is identical, only the count differs). 37 segments + 14 spotlights (2 per digit column, wired zig-zag from the left) = 347 LEDs total.
 
-**Key Libraries**: FastLED, AutoConnect, ArduinoJson, PubSubClient (MQTT), ArduinoHA, NonBlockingRTTTL
+**Removed from this fork**: DHT sensor, DS3231 RTC (time comes from NTP only), FFT/music visualizer, RTTTL buzzer hardware. Their libraries were dropped from platformio.ini.
+
+**Key Libraries**: FastLED, AutoConnect, ArduinoJson, PubSubClient (MQTT), home-assistant-integration (ArduinoHA), NonBlockingRTTTL
 
 ## Build and Development Commands
 
-### Build
+PlatformIO CLI on this machine: `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`
+
 ```bash
-pio run
+pio run                    # build firmware -> .pio/build/espwroom32/firmware.bin
+pio run --target buildfs   # build filesystem image -> .pio/build/espwroom32/littlefs.bin
+pio run --target upload    # flash firmware via USB
+pio run --target uploadfs  # flash filesystem via USB
+pio run --target monitor   # serial monitor (112500 baud, NOT 115200!)
 ```
 
-### Upload to device
-```bash
-pio run --target upload
-```
-
-### Monitor serial output
-```bash
-pio run --target monitor
-```
-Monitor is configured at 112500 baud (see platformio.ini).
-
-### Build and upload
-```bash
-pio run --target upload && pio run --target monitor
-```
-
-### Clean build
-```bash
-pio run --target clean
-```
-
-### Upload filesystem (LittleFS)
-```bash
-pio run --target uploadfs
-```
-The `data/` directory contains HTML files for the web interface (index.html, settings.html) that get uploaded to the ESP32's LittleFS filesystem.
+**OTA updates** (preferred by the user): upload `firmware.bin` at `http://shelfclock/update` and `littlefs.bin` at `http://shelfclock/updatefs` (both linked in the web UI nav). During an OTA upload the display intentionally goes dark (`otaInProgress` flag stops `loop()` from driving LEDs/filesystem).
 
 ## Code Architecture
 
-### Main Application Flow
-
-**[src/ShelfClock.cpp](src/ShelfClock.cpp)** is the main application file containing:
-- `setup()`: Initializes hardware, filesystem, WiFi (via AutoConnect), web server, MQTT, Home Assistant, RTC, sensors
-- `loop()`: Main state machine that handles different display modes and updates
-
 ### Module Organization
 
-The codebase is organized into specialized modules:
+- **[src/ShelfClock.cpp](src/ShelfClock.cpp)**: `setup()`/`loop()`, LED addressing tables, character font, timezone handling (`applyTimeConfig()`), boot sequence
+- **[src/display_modes.cpp](src/display_modes.cpp)**: all `display*Mode()` functions, `scroll()`, `displayNumber()`, `ShelfDownLights()` (spotlights), colon/dots rendering
+- **[src/lightshow.cpp](src/lightshow.cpp)**: ~22 lightshow effects (Chase, Twinkles, Rainbow, Matrix, Rain, Fire, Snake, Cylon, Breathing, Sparkle, Meteor, ColorWipe, Plasma, Confetti, Juggle, Heartbeat, pixel-level effects...)
+- **[src/party_games.cpp](src/party_games.cpp)**: party games (0=Dice, 1=Roulette, 2=Shot Timer, 3=Higher/Lower)
+- **[src/settings_manager.cpp](src/settings_manager.cpp)**: settings JSON save/load incl. NVS backup, file helpers, schedule processing
+- **[src/web_handlers.cpp](src/web_handlers.cpp)**: all web endpoints (`loadWebPageHandlers()`), incl. `/getleds` (live preview data), `/updateanything` (generic settings updates), OTA handlers
+- **[src/ha_integration.cpp](src/ha_integration.cpp)**: Home Assistant MQTT discovery entities and state sync (`haSyncState()`, throttled to 1s/dirty-flag)
+- **[src/mqtt_integration.cpp](src/mqtt_integration.cpp)**: plain MQTT client setup/reconnect
+- **[src/prefs.cpp](src/prefs.cpp)**: type-safe Preferences (NVS) wrapper
+- **[include/globals.h](include/globals.h)**: LED config constants and extern declarations for all shared globals (defined in ShelfClock.cpp)
 
-- **[src/ShelfClock.cpp](src/ShelfClock.cpp)**: Main application, display routines, all lightshow effects, web server handlers
-- **[src/ha_integration.cpp](src/ha_integration.cpp)**: Home Assistant MQTT discovery and state synchronization
-- **[src/mqtt_integration.cpp](src/mqtt_integration.cpp)**: MQTT client setup and message handling
-- **[src/prefs.cpp](src/prefs.cpp)**: Preferences wrapper providing type-safe NVS storage access
-- **[include/ShelfClock.h](include/ShelfClock.h)**: Function declarations for display modes and effects
-- **[include/ha_integration.h](include/ha_integration.h)**: HA integration interface with extern declarations for shared state
-- **[include/mqtt_integration.h](include/mqtt_integration.h)**: MQTT interface
-- **[include/prefs.h](include/prefs.h)**: Preferences API
+### Display Modes (`clockMode`)
+
+- **0**: Time, **1**: Countdown, **2**: Party games, **3**: Scoreboard, **4**: Stopwatch, **5**: Lightshow, **7**: Date, **8**: HA value display (number sent from Home Assistant), **10**: Display off, **11**: Scroll text
+
+Modes get CPU time in the 500ms tick in `loop()`; `displayRealtimeMode()` runs every loop pass for fast lightshow effects.
 
 ### LED Addressing System
 
-The project uses a complex LED addressing system to map 7-segment digits to physical LED strips:
+Segment `n` (0-36) occupies LEDs `n*LEDS_PER_SEGMENT ... +LEDS_PER_SEGMENT-1`. Wiring starts at digit 0 (rightmost): seg 0 = its lower-right vertical, then serpentine per digit. Segment roles within a digit (base = digit*5): +0 lower-right, +1 bottom, +2 lower-left, +3 upper-left, +4 top, +5 upper-right, +6 middle. Real digits are 0/2/4/6 (right to left), fake digits 1/3/5 share their verticals with the neighbouring real digits and only own top/middle/bottom. LED direction per role: top = left-to-right, middle/bottom = right-to-left, left verticals = bottom-to-top, right verticals = top-to-bottom. The 14 spotlights follow after the segment LEDs, zig-zag from the LEFT (col6 upper,lower / col5 lower,upper / alternating). The `seg(n)`/`nseg(n)` macros and `FAKE_LEDs_C_*` tables in ShelfClock.cpp map effect layouts onto this.
 
-- **LEDS_PER_SEGMENT**: Configurable 1-10 LEDs per segment (default 9)
-- **Segments per digit**: 7 (standard 7-segment display)
-- **Total digits**: 7 (4 real digits for time + 3 "fake" digits for separators/effects)
-- **Segment mapping**: Uses preprocessor macros (seg(n), nseg(n)) to map logical segments to physical LED positions
-- **Digit definitions**: `digit0`, `fdigit1`, `digit2`, `fdigit3`, `digit4`, `fdigit5`, `digit6` define which segments belong to each digit position
+The web live preview ([data/js/preview.js](data/js/preview.js)) mirrors this exact topology and auto-detects LEDs-per-segment from the `/getleds` payload length.
 
-The mapping handles LED direction reversals in the physical wiring. See [src/ShelfClock.cpp:74-130](src/ShelfClock.cpp#L74-L130) for the segment addressing macros.
+### Settings and Persistence
 
-### Display Modes
+Three layers:
+1. **LittleFS JSON** (`/settings/clockSettings-generic.json`): main settings file, saved by `saveclockSettings("generic")`, auto-saved 3s after `updateSettingsRequired = 1`
+2. **NVS backup** (`settingsBak` key): written on every save, restored on boot if it differs from the file - this is what makes settings survive filesystem updates. NVS also holds MQTT credentials (never in the repo!) and WiFi credentials (managed by AutoConnect)
+3. **Named presets**: `/settings/clockSettings-<name>.json`
 
-The clock operates in different modes controlled by `currentMode` variable:
-- **0**: Time display
-- **1**: Countdown timer
-- **2**: Scoreboard
-- **3**: Stopwatch
-- **4**: Lightshow (various effects like Chase, Rainbow, Fire, Snake, etc.)
-- **5**: Date display
-- **6**: Scroll text
-- **7**: Realtime mode (music visualizer using sound sensor and FFT)
+**Timezone**: `timeZone` (POSIX TZ string, default `CET-1CEST,M3.5.0,M10.5.0/3` = Berlin with automatic DST) applied via `applyTimeConfig()`. Empty string = legacy manual mode (`gmtOffset_sec` + `DSTime`). Setting a manual offset (web or HA) clears `timeZone`.
 
-Each mode has a corresponding `display*Mode()` function in ShelfClock.cpp.
+### Web Interface (data/ -> LittleFS)
 
-### Settings and Preferences
+- **[data/index.html](data/index.html)**: home page - live LED preview canvas, mode buttons, spotlight quick controls, timer/scoreboard/party/lightshow controls
+- **[data/settings.html](data/settings.html)**: full settings incl. timezone dropdown and MQTT config (password is masked server-side)
+- **[data/js/api.js](data/js/api.js)**: fetch wrapper, **[data/js/settings-store.js](data/js/settings-store.js)**: settings cache/update logic, **[data/js/main.js](data/js/main.js)**: page wiring, **[data/js/preview.js](data/js/preview.js)**: live preview renderer (applies FastLED TypicalLEDStrip correction + gamma so colors match the real strip)
+- No frameworks - vanilla JS/CSS (Bootstrap/jQuery were removed)
 
-**NVS (Non-Volatile Storage)** is used extensively for persistent settings:
-- Color settings for different display elements (hour, minute, colon, countdown, scoreboard, etc.)
-- Display preferences (brightness, color change frequency, display types)
-- MQTT configuration
-- Schedule data (alarms, recurring events)
-
-**Settings Files**: Settings can be saved/loaded as JSON files in LittleFS under `/settings_*.json` naming pattern, allowing preset configurations. The functions `saveclockSettings(String fileType)` and `getclockSettings(String fileType)` handle this.
-
-**Important**: The project uses a custom partition scheme ([4M-default_nvs.csv](4M-default_nvs.csv)) because standard NVS is too small for the extensive Preferences and AutoConnect data. The custom scheme allocates more NVS space.
-
-### Web Interface
-
-The web interface is served from LittleFS:
-- **[data/index.html](data/index.html)**: Main control page
-- **[data/settings.html](data/settings.html)**: Settings configuration page
-
-Web handlers are registered in `loadWebPageHandlers()` and process GET/POST requests to read/update clock settings.
-
-### Home Assistant Integration
-
-**[src/ha_integration.cpp](src/ha_integration.cpp)** implements MQTT discovery for Home Assistant:
-- Publishes device configuration and available entities
-- Provides select entities for display modes, lightshow modes, color settings
-- Provides number entities for brightness, scoreboard values
-- Provides switch entities for various options
-- Syncs state changes bidirectionally (HA ↔ ESP32)
-
-The `haSyncState()` function publishes current state to HA. Device discovery uses the `home-assistant-integration` library.
-
-### MQTT Integration
-
-**[src/mqtt_integration.cpp](src/mqtt_integration.cpp)** handles:
-- MQTT connection/reconnection logic
-- Command topics for controlling the clock
-- State publishing for monitoring
-
-MQTT configuration (broker, port, username, password) is stored in NVS preferences.
-
-### Schedule System
-
-The clock supports complex scheduling using JSON arrays stored in NVS:
-- **Schedule types**: Daily, weekly (specific days), hourly, specific date/time
-- **Actions**: Play RTTTL songs, change modes, trigger alarms
-- **Recurring events**: Support for yearly recurring events (like birthdays)
-
-Schedules are processed in `processSchedules()` which runs periodically to check if any schedule matches current time.
+Notable endpoints: `/getleds` (hex LED state for preview, polled every 500ms), `/updateanything` (POST JSON, generic setting updates), `/getsettings`, `/exportsettings`/`/importsettings` (full backup incl. MQTT config), `/formatfs` (POST with confirm=yes only), `/debuglog`, `/getdebug` (includes `resetReason` - "Brownout" means power problem, the hardware has had flaky-connector issues).
 
 ## Important Configuration Notes
 
-### Partition Scheme
-The project REQUIRES the custom partition file `4M-default_nvs.csv` specified in platformio.ini:
-```ini
-board_build.partitions = 4M-default_nvs.csv
-```
-This allocates sufficient NVS space. Do not change this without understanding the memory layout implications.
+- **Partition scheme**: `4M-default_nvs.csv` is REQUIRED (spiffs partition 0xd0000 must match littlefs.bin size). Do not change.
+- **LED_PIN 15** - this build's hardware; the refactor once silently reverted it to 4 and the display went dark.
+- **Serial baud 112500** (not 115200), matches platformio.ini.
+- **LittleFS** (not SPIFFS); `data/` uploads via uploadfs or `/updatefs`.
+- Extensive global state: most config vars are defined in ShelfClock.cpp and declared extern in globals.h.
+- `git push` goes to the user's fork `Mastershort/ShelfClock_Mastershort`; `upstream` is the original MacGyverr/ShelfClock - never push there.
 
-### LED Configuration
-To change LEDs per segment, modify `LEDS_PER_SEGMENT` in ShelfClock.cpp and ensure the corresponding `#elif` case exists for the seg(n)/nseg(n) macros.
+## Known Issues / Open Work
 
-### Serial Monitor Baud Rate
-Always use 112500 baud (not the standard 115200) as configured in platformio.ini.
-
-### Filesystem
-The project uses LittleFS (not SPIFFS). See the `#if USE_LITTLEFS` block in ShelfClock.cpp. Files in `data/` directory need to be uploaded via `pio run --target uploadfs`.
-
-### Global State
-The codebase uses extensive global variables for state management. Most configuration variables are declared as `extern` in header files and defined in ShelfClock.cpp. The ha_integration.h file contains a comprehensive list of shared state variables.
-
-## Key Dependencies
-
-All dependencies are managed via platformio.ini lib_deps. Critical dependencies:
-- **FastLED**: LED control and color management
-- **AutoConnect**: WiFi configuration portal and web server
-- **ArduinoJson**: Settings and schedule management
-- **PubSubClient**: MQTT client
-- **home-assistant-integration**: HA MQTT discovery
-- **RTClib**: DS3231 real-time clock interface
-- **DHT sensor library**: Temperature/humidity sensor
-- **arduinoFFT**: Music visualizer frequency analysis
-- **NonBlockingRTTTL**: Ringtone playback
+- `scroll()` blocks the main loop for the whole scroll duration (calls `server.handleClient()` mid-render as a workaround) - wants a non-blocking state-machine rewrite
+- `/updateanything` is a ~400-line if-chain, could be table-driven
+- `checkSleepTimer()` is empty (suspend/sleep feature unfinished)
+- Planned features: HA-Notify (MQTT messages scrolled on the clock), sunrise alarm, birthday confetti via scheduler
