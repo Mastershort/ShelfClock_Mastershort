@@ -607,10 +607,11 @@ void loadWebPageHandlers() {
       Serial.println("Deleting Schedule..");
       Serial.println(deleteData);
       }
+      createSchedulesArray();
       server.send(200, "text/json", "{\"result\":\"ok\"}");
+    } else {
+      server.send(400, "text/json", "{\"result\":\"error\",\"reason\":\"no data\"}");
     }
-  server.send(401);
-  createSchedulesArray();
   });
 
   server.on("/scheduler", HTTP_POST, []() {
@@ -652,10 +653,11 @@ void loadWebPageHandlers() {
         strcat(XprocessedText, ".json");
         writeFile(FileFS, XprocessedText, body_array);
       }
+      createSchedulesArray();
       server.send(200, "text/json", "{\"result\":\"ok\"}");
+    } else {
+      server.send(400, "text/json", "{\"result\":\"error\",\"reason\":\"no data\"}");
     }
-  server.send(401);
-  createSchedulesArray();
   });
 
   server.on("/debugpage", []() {
@@ -735,6 +737,7 @@ void loadWebPageHandlers() {
     DynamicJsonDocument json(11000);
 
     json["resetReason"] = lastResetReason;
+    json["bootLoopSafeMode"] = bootLoopSafeMode;
     json["freeHeap"] = ESP.getFreeHeap();
     json["minFreeHeap"] = ESP.getMinFreeHeap();
     json["heapSize"] = ESP.getHeapSize();

@@ -211,6 +211,9 @@ extern String notifyText;
 extern uint32_t notifyColorValue;
 extern int notifyRepeat;
 
+// --- Boot-loop guard ---
+extern bool bootLoopSafeMode;   // true when this boot forced Clock mode after repeated crash-reboots
+
 // --- OTA update state ---
 extern bool otaInProgress;       // true while /update or /updatefs uploads run - loop() must not touch LEDs or LittleFS
 extern const char* lastResetReason;

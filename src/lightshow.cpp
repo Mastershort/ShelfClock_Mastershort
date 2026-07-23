@@ -6,64 +6,44 @@
 // Lightshow Effects – extracted from ShelfClock.cpp
 // ============================================================
 
-void Chase() {   //lightshow chase mode
-  int chaseMode = random(0, 7);
-  if (pastelColors == 0){ lightchaseColorOne = CHSV(random(0, 255), 255, 255); }
-  if (pastelColors == 0){ lightchaseColorTwo = CHSV(random(0, 255), 255, 255); }
-  if (pastelColors == 1){ lightchaseColorOne = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
-  if (pastelColors == 1){ lightchaseColorTwo = CRGB(random(0, 255), random(0, 255), random(0, 255)); }
-  for (int i=0; i<SPECTRUM_PIXELS; i++) {  //draw forward
-    for (byte s=0; s<LEDS_PER_SEGMENT; s++ ){              // 7 LEDs per segment
-   int fake =  i * LEDS_PER_SEGMENT;
-      if (chaseMode == 0) {LEDs[FAKE_LEDs_C_BLTR[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 1) {LEDs[FAKE_LEDs_C_BRTL[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 2) {LEDs[FAKE_LEDs_C_BMUP[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 3) {LEDs[FAKE_LEDs_C_TMDN[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 4) {LEDs[FAKE_LEDs_C_CMOT[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 5) {LEDs[FAKE_LEDs_C_TLBR[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 6) {LEDs[FAKE_LEDs_C_CSIN[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 7) {LEDs[FAKE_LEDs_C_TRBL[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 8) {LEDs[FAKE_LEDs_C_OUTS[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 9) {LEDs[FAKE_LEDs_C_VERT[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 10) {LEDs[FAKE_LEDs_C_OUTS2[s+((fake))]] = lightchaseColorOne;}
-      if (chaseMode == 11) {LEDs[FAKE_LEDs_C_VERT2[s+((fake))]] = lightchaseColorOne;}
-    }
-    FastLED.show();
-  for( int d = 0; d < 40; d++) {server.handleClient(); }  //delay to speed, but so the web buttons still work
-  // delay(1);
-  for( int d = 0; d < 40; d++) {
-      server.handleClient();
-      haMqtt.loop();      // MQTT am Leben erhalten
-      mqttClient.loop();  // MQTT am Leben erhalten
-      delay(1);
-  }  //delay to speed, but so the web buttons still work
+static const uint16_t* chaseTable(int mode) {
+  switch (mode) {
+    case 0:  return FAKE_LEDs_C_BLTR;
+    case 1:  return FAKE_LEDs_C_BRTL;
+    case 2:  return FAKE_LEDs_C_BMUP;
+    case 3:  return FAKE_LEDs_C_TMDN;
+    case 4:  return FAKE_LEDs_C_CMOT;
+    case 5:  return FAKE_LEDs_C_TLBR;
+    case 6:  return FAKE_LEDs_C_CSIN;
+    default: return FAKE_LEDs_C_BLTR;
   }
-  for (int i = SPECTRUM_PIXELS-1; i > -1; --i) {   //draw backwards
-    for (byte s=0; s<LEDS_PER_SEGMENT; s++ ){              // 7 LEDs per segment
-   int fake =  i * LEDS_PER_SEGMENT;
-      if (chaseMode == 0) {LEDs[FAKE_LEDs_C_BLTR[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 1) {LEDs[FAKE_LEDs_C_BRTL[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 2) {LEDs[FAKE_LEDs_C_BMUP[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 3) {LEDs[FAKE_LEDs_C_TMDN[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 4) {LEDs[FAKE_LEDs_C_CMOT[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 5) {LEDs[FAKE_LEDs_C_TLBR[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 6) {LEDs[FAKE_LEDs_C_CSIN[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 7) {LEDs[FAKE_LEDs_C_TRBL[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 8) {LEDs[FAKE_LEDs_C_OUTS[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 9) {LEDs[FAKE_LEDs_C_VERT[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 10) {LEDs[FAKE_LEDs_C_OUTS2[s+((fake))]] = lightchaseColorTwo;}
-      if (chaseMode == 11) {LEDs[FAKE_LEDs_C_VERT2[s+((fake))]] = lightchaseColorTwo;}
+}
+
+void Chase() {   //lightshow chase mode - non-blocking: fills one column per call
+  static int step = 0;   // 0..36 forward fill (colorOne), 37..73 backward fill (colorTwo)
+  static const uint16_t* table = FAKE_LEDs_C_BLTR;
+
+  if (step == 0) {
+    table = chaseTable(random(0, 7));
+    if (pastelColors == 0) {
+      lightchaseColorOne = CHSV(random(0, 255), 255, 255);
+      lightchaseColorTwo = CHSV(random(0, 255), 255, 255);
+    } else {
+      lightchaseColorOne = CRGB(random(0, 255), random(0, 255), random(0, 255));
+      lightchaseColorTwo = CRGB(random(0, 255), random(0, 255), random(0, 255));
     }
-    FastLED.show();
-  for( int d = 0; d < 40; d++) {server.handleClient(); }  //delay to speed, but so the web buttons still work
-  //  delay(1);
-  for( int d = 0; d < 40; d++) {
-      server.handleClient();
-      haMqtt.loop();      // MQTT am Leben erhalten
-      mqttClient.loop();  // MQTT am Leben erhalten
-      delay(1);
-  }  //delay to speed, but so the web buttons still work
   }
+
+  bool forward = step < SPECTRUM_PIXELS;
+  int col = forward ? step : (SPECTRUM_PIXELS - 1 - (step - SPECTRUM_PIXELS));
+  CRGB color = forward ? lightchaseColorOne : lightchaseColorTwo;
+  int fake = col * LEDS_PER_SEGMENT;
+  for (byte s = 0; s < LEDS_PER_SEGMENT; s++) {
+    LEDs[table[s + fake]] = color;
+  }
+
+  step++;
+  if (step >= SPECTRUM_PIXELS * 2) { step = 0; }
   if (clockMode != 5) { allBlank(); }
 } //end of chase
 

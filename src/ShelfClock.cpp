@@ -130,6 +130,15 @@ uint32_t notifyColorValue = 0xFFFFFF;
 int notifyRepeat = 1;
 
 bool otaInProgress = false;
+
+// --- Boot-loop guard ---
+// Survives software resets/panics (RTC memory keeps its value across
+// ESP.restart()/crash reboots) but is cleared on power loss - exactly what
+// we want: count only *crash* reboots, not normal power cycling.
+#define BOOTLOOP_MAGIC 0xA5A51234
+RTC_NOINIT_ATTR uint32_t bootLoopMagic;
+RTC_NOINIT_ATTR uint8_t bootLoopCount;
+bool bootLoopSafeMode = false;
 const char* lastResetReason = "unknown";
 
 static const char* resetReasonToString(esp_reset_reason_t r) {
@@ -425,6 +434,22 @@ void setup() {
   Serial.begin(112500);
   lastResetReason = resetReasonToString(esp_reset_reason());
   webLog(String("Boot - reset reason: ") + lastResetReason);
+
+  // Boot-loop guard: count crash reboots since the last stable run (loop()
+  // clears this after 20s uptime). Too many quick crash-reboots in a row ->
+  // force a safe display mode for this boot instead of restoring whatever
+  // state (e.g. a Lightshow mode) may have triggered the crash.
+  if (bootLoopMagic != BOOTLOOP_MAGIC) {
+    bootLoopMagic = BOOTLOOP_MAGIC;
+    bootLoopCount = 0;
+  }
+  bootLoopCount++;
+  if (bootLoopCount >= 4) {
+    bootLoopSafeMode = true;
+    bootLoopCount = 0;
+    webLog("Boot loop detected - forcing safe Clock mode for this boot");
+  }
+
   setupPrefs();   // Initialize Preferences with "ShelfClock" namespace
   setupHA();      // Home Assistant Integration
   // Note: preferences.begin() is already called in setupPrefs() - do NOT call it again!
@@ -522,6 +547,14 @@ void setup() {
   //load settings from nvram and flash
   Serial.println("load all settings from json file");
   getclockSettings("generic"); //load all settings from json file
+
+  if (bootLoopSafeMode) {
+    // Override whatever mode was restored - Clock mode has no blocking
+    // effects and can't be the cause of a crash loop. Persist it so the
+    // guard doesn't just get re-triggered by the same saved state.
+    clockMode = 0;
+    updateSettingsRequired = 1;
+  }
 
   // If settings file doesn't exist (first boot), save default values
   if (!FileFS.exists("/settings/clockSettings-generic.json")) {
@@ -755,6 +788,13 @@ void loop(){
     return;
   }
   scrollTick();  // advance a running scroll (non-blocking, one column per step)
+
+  // Boot-loop guard: 20s without a crash counts as a stable boot
+  static bool bootMarkedStable = false;
+  if (!bootMarkedStable && millis() > 20000) {
+    bootLoopCount = 0;
+    bootMarkedStable = true;
+  }
   if (WiFi.status() != WL_CONNECTED) {
     WiFi_elapsedTime = millis() - WiFi_startTime;
     if (WiFi_elapsedTime >= WiFi_MAX_RETRY_DURATION) {

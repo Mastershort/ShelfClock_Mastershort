@@ -400,18 +400,12 @@ void displayHAValueMode() {
 
 void displayLightshowMode() {
   currentMode = 0;
-  if (lightshowMode == 0) {Chase();}
-  //if (lightshowMode == 1) {Twinkles();}
-  //if (lightshowMode == 2) {Rainbow();}
-  //if (lightshowMode == 3) {GreenMatrix();}
-  //if (lightshowMode == 4) {blueRain();}
-  //if (lightshowMode == 5) {Fire2021();}
-  //if (lightshowMode == 6) {Snake();}
-  //if (lightshowMode == 7) {Cylon();}
+  // all lightshow effects (incl. Chase) run non-blocking from displayRealtimeMode()
 }
 
 void displayRealtimeMode(){   //main RealtimeModes function, always is running
   if (scrollActive) { return; }   //don't fight with a running scroll over the LEDs
+  if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 0) {EVERY_N_MILLISECONDS(40) {Chase(); FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 1) {EVERY_N_MILLISECONDS(30) {Twinkles();FastLED.show();}}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 2) {Rainbow();FastLED.show();}
   if ( (suspendType == 0 || isAsleep == 0) && clockMode == 5 && lightshowMode == 3) {EVERY_N_MILLISECONDS(100) {GreenMatrix();}}
