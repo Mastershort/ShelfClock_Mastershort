@@ -15,6 +15,7 @@
 #include "../include/settings_manager.h"
 #include "../include/web_handlers.h"
 #include "../include/party_games.h"
+#include "../include/update_check.h"
 Preferences preferences;
 
 
@@ -73,7 +74,7 @@ FS* filesystem =      &LittleFS;
 
 
 
-String softwareVersion = "version-2.0.0-alpha";
+String softwareVersion = "version-2.1.0";
 const char* host = "shelfclock";
 const int   daylightOffset_sec = 3600;
 const char* ntpServer = "pool.ntp.org";
@@ -794,6 +795,13 @@ void loop(){
   if (!bootMarkedStable && millis() > 20000) {
     bootLoopCount = 0;
     bootMarkedStable = true;
+  }
+
+  // GitHub update check: first 60s after boot, then every 24h. Runs on its
+  // own task (see checkForUpdateAsync()) so it can never block rendering.
+  #define UPDATE_CHECK_INTERVAL_MS (24UL * 60 * 60 * 1000)
+  if (millis() > 60000 && (millis() - lastUpdateCheckMs) > UPDATE_CHECK_INTERVAL_MS) {
+    checkForUpdateAsync();
   }
   if (WiFi.status() != WL_CONNECTED) {
     WiFi_elapsedTime = millis() - WiFi_startTime;

@@ -3,6 +3,7 @@
 #include "../include/display_modes.h"
 #include "../include/settings_manager.h"
 #include "../include/party_games.h"
+#include "../include/update_check.h"
 #include <ArduinoHA.h>
 #include <FastLED.h>
 #include <time.h>
@@ -15,6 +16,7 @@ HADevice device(mac, sizeof(mac));
 HAMqtt haMqtt(haWiFiClient, device, 120);
 
 // --- Entities ---
+HASensor haFirmwareStatus("sc_firmware_status");
 HASelect haMode("sc_mode");
 HASelect haLightShowMode("sc_lightshow_mode");
 HASelect haPalette("sc_palette");
@@ -422,7 +424,11 @@ void setupHA() {
     device.setName("ShelfClock");
     device.setManufacturer("Mastershort");
     device.setModel("ESP32 LED Clock");
-    device.setSoftwareVersion("0.98");
+    device.setSoftwareVersion(softwareVersion.c_str());
+
+    haFirmwareStatus.setName("Firmware Status");
+    haFirmwareStatus.setIcon("mdi:cloud-download");
+    haMqtt.addDeviceType(&haFirmwareStatus);
 
     haMode.setOptions("Clock;Countdown;Scoreboard;Stopwatch;Lightshow;Date;Display Off;Scroll;HA Display;Party Games");
     haMode.setName("Mode");
@@ -611,6 +617,16 @@ void haSyncState() {
     if (!haDirty && (now - lastHaSyncMs < 1000)) return;
     lastHaSyncMs = now;
     haDirty = false;
+
+    // Firmware status: only re-publish when the update-check result changes
+    static bool lastReportedAvailable = false;
+    static String lastReportedVersion = "";
+    if (updateAvailable != lastReportedAvailable || latestVersionStr != lastReportedVersion) {
+        lastReportedAvailable = updateAvailable;
+        lastReportedVersion = latestVersionStr;
+        String status = updateAvailable ? ("Update verf\xC3\xBCgbar: " + latestVersionStr) : "Aktuell";
+        haFirmwareStatus.setValue(status.c_str());
+    }
 
     haMode.setState(modeToIndex(clockMode));
     haLightShowMode.setState(lightshowMode);

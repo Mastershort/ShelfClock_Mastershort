@@ -11,6 +11,7 @@
 #include <Update.h>
 #include <HTTPUpdateServer.h>
 #include <WiFi.h>
+#include "../include/update_check.h"
 
 // Placeholder sent to the browser instead of the real MQTT password;
 // receiving it back unchanged means "keep the stored password"
@@ -904,6 +905,51 @@ void loadWebPageHandlers() {
         otaInProgress = false;
         webLog("Firmware update aborted");
       }
+  });
+
+  server.on("/checkupdate", HTTP_POST, []() {
+    if (updateCheckInProgress) {
+      server.send(409, "application/json", "{\"result\":\"error\",\"reason\":\"check already running\"}");
+      return;
+    }
+    checkForUpdate();  // synchronous HTTPS call to GitHub, a few seconds
+    DynamicJsonDocument json(512);
+    json["updateAvailable"] = updateAvailable;
+    json["currentVersion"] = currentVersionStr;
+    json["latestVersion"] = latestVersionStr;
+    json["hasFirmware"] = latestFirmwareUrl.length() > 0;
+    json["hasFilesystem"] = latestFilesystemUrl.length() > 0;
+    json["error"] = updateCheckError;
+    String output;
+    serializeJson(json, output);
+    server.send(200, "application/json", output);
+  });
+
+  server.on("/getupdateinfo", HTTP_GET, []() {
+    DynamicJsonDocument json(512);
+    json["updateAvailable"] = updateAvailable;
+    json["currentVersion"] = currentVersionStr;
+    json["latestVersion"] = latestVersionStr;
+    json["hasFirmware"] = latestFirmwareUrl.length() > 0;
+    json["hasFilesystem"] = latestFilesystemUrl.length() > 0;
+    json["error"] = updateCheckError;
+    json["lastCheckMs"] = lastUpdateCheckMs;
+    String output;
+    serializeJson(json, output);
+    server.send(200, "application/json", output);
+  });
+
+  server.on("/installupdate", HTTP_POST, []() {
+    String type = server.arg("type");
+    String url = (type == "filesystem") ? latestFilesystemUrl : latestFirmwareUrl;
+    if (url.length() == 0) {
+      server.send(400, "application/json", "{\"result\":\"error\",\"reason\":\"no update url\"}");
+      return;
+    }
+    server.send(200, "application/json", "{\"result\":\"ok\",\"message\":\"Installation gestartet, das Ger\\u00e4t startet danach neu.\"}");
+    server.client().flush();
+    installUpdateFromUrl(url, (type == "filesystem") ? U_SPIFFS : U_FLASH);
+    // only reached on failure - success path restarts the device from inside installUpdateFromUrl()
   });
 
   server.on("/updatefs", HTTP_GET, []() {

@@ -510,6 +510,18 @@
 
     <section>
       <div class="button-wrapper yellow">
+        <h3>Firmware Update</h3>
+        <p style="font-size:0.85em;margin:0.3em 0;">Pr&uuml;ft auf <a href="https://github.com/Mastershort/ShelfClock_Mastershort/releases" target="_blank" rel="noopener">GitHub</a> nach neuen Releases. Installation l&auml;dt die Datei direkt herunter und flasht sie - der Vorgang kann nicht abgebrochen werden.</p>
+        <div id="updateStatus" class="smaller" style="margin-bottom:0.5em;">Lade...</div>
+        <div>
+          <input type="button" id="btnCheckUpdate" value="Nach Updates suchen" style="background:#2196F3;">
+          <input type="button" id="btnInstallFirmware" value="Firmware installieren" style="background:#4CAF50;display:none;">
+          <input type="button" id="btnInstallFilesystem" value="Dateisystem installieren" style="background:#4CAF50;display:none;">
+        </div>
+      </div>
+    </section>
+    <section>
+      <div class="button-wrapper yellow">
         <h3>Backup &amp; Restore Settings</h3>
         <p style="font-size:0.85em;margin:0.3em 0;">Export all settings, MQTT config and schedules as a backup file. Import to restore on a new ESP.</p>
         <div>

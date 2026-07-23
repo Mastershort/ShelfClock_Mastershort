@@ -617,6 +617,76 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     }
 
+    /* Firmware Update */
+    const updateStatus = document.getElementById('updateStatus');
+    const btnCheckUpdate = document.getElementById('btnCheckUpdate');
+    const btnInstallFirmware = document.getElementById('btnInstallFirmware');
+    const btnInstallFilesystem = document.getElementById('btnInstallFilesystem');
+
+    function renderUpdateInfo(info) {
+        if (!updateStatus) return;
+        if (info.error) {
+            updateStatus.textContent = 'Fehler bei der Prüfung: ' + info.error;
+            updateStatus.style.color = '#e05555';
+        } else if (!info.latestVersion) {
+            updateStatus.textContent = 'Noch nicht geprüft.';
+            updateStatus.style.color = '';
+        } else if (info.updateAvailable) {
+            updateStatus.textContent = 'Update verfügbar: ' + info.latestVersion + ' (aktuell: ' + info.currentVersion + ')';
+            updateStatus.style.color = '#4CAF50';
+        } else {
+            updateStatus.textContent = 'Aktuell (Version ' + info.currentVersion + ').';
+            updateStatus.style.color = '';
+        }
+        if (btnInstallFirmware) btnInstallFirmware.style.display = (info.updateAvailable && info.hasFirmware) ? 'inline-block' : 'none';
+        if (btnInstallFilesystem) btnInstallFilesystem.style.display = (info.updateAvailable && info.hasFilesystem) ? 'inline-block' : 'none';
+    }
+
+    async function loadUpdateInfo() {
+        try {
+            const info = await Api.request('/getupdateinfo');
+            if (info) renderUpdateInfo(info);
+        } catch (e) {
+            if (updateStatus) updateStatus.textContent = 'Gerät nicht erreichbar.';
+        }
+    }
+
+    if (btnCheckUpdate) {
+        loadUpdateInfo();
+        btnCheckUpdate.addEventListener('click', async () => {
+            updateStatus.textContent = 'Prüfe auf GitHub...';
+            updateStatus.style.color = '';
+            btnCheckUpdate.disabled = true;
+            try {
+                const info = await Api.request('/checkupdate', { method: 'POST' });
+                renderUpdateInfo(info);
+            } catch (e) {
+                updateStatus.textContent = 'Prüfung fehlgeschlagen: ' + e.message;
+                updateStatus.style.color = '#e05555';
+            }
+            btnCheckUpdate.disabled = false;
+        });
+    }
+
+    function installUpdate(type, button) {
+        if (!confirm('Update jetzt installieren? Das Gerät startet danach neu und ist kurz nicht erreichbar.')) return;
+        button.disabled = true;
+        updateStatus.textContent = 'Installation läuft, bitte warten...';
+        updateStatus.style.color = '';
+        fetch('/installupdate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'type=' + type
+        }).catch(() => {});  // the device restarts before it can answer - that's expected
+        setTimeout(() => { updateStatus.textContent = 'Neustart... Seite in Kürze neu laden.'; }, 4000);
+    }
+
+    if (btnInstallFirmware) {
+        btnInstallFirmware.addEventListener('click', () => installUpdate('firmware', btnInstallFirmware));
+    }
+    if (btnInstallFilesystem) {
+        btnInstallFilesystem.addEventListener('click', () => installUpdate('filesystem', btnInstallFilesystem));
+    }
 
     /* Debug Page */
     if (document.querySelectorAll("body.debug").length > 0) {
