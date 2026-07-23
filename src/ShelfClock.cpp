@@ -74,7 +74,7 @@ FS* filesystem =      &LittleFS;
 
 
 
-String softwareVersion = "version-2.1.0";
+String softwareVersion = "version-2.1.1";
 const char* host = "shelfclock";
 const int   daylightOffset_sec = 3600;
 const char* ntpServer = "pool.ntp.org";
